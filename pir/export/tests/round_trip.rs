@@ -7,27 +7,16 @@ use ff::{Field, PrimeField as _};
 use pasta_curves::Fp;
 
 use imt_tree::hasher::PoseidonHasher;
-use imt_tree::tree::{build_nf_ranges, build_sentinel_tree, TREE_DEPTH};
+use imt_tree::tree::{build_sentinel_tree, TREE_DEPTH};
 use imt_tree::ImtProofData;
 
 use pir_export::tier0::Tier0Data;
 use pir_export::tier1::Tier1Row;
 use pir_export::tier2::Tier2Row;
 use pir_export::{
-    build_pir_tree, PIR_DEPTH, TIER0_LAYERS, TIER1_LAYERS, TIER1_LEAVES, TIER1_ROW_BYTES,
-    TIER2_LEAVES, TIER2_ROW_BYTES,
+    build_pir_tree, build_ranges_with_sentinels, PIR_DEPTH, TIER0_LAYERS, TIER1_LAYERS,
+    TIER1_LEAVES, TIER1_ROW_BYTES, TIER2_LEAVES, TIER2_ROW_BYTES,
 };
-
-/// Build ranges with sentinels (same as build_sentinel_tree but returns ranges).
-fn build_ranges_with_sentinels(raw_nfs: &[Fp]) -> Vec<[Fp; 2]> {
-    let step = Fp::from(2u64).pow([250, 0, 0, 0]);
-    let sentinels: Vec<Fp> = (0u64..=16).map(|k| step * Fp::from(k)).collect();
-    let mut all_nfs: Vec<Fp> = sentinels;
-    all_nfs.extend_from_slice(raw_nfs);
-    all_nfs.sort();
-    all_nfs.dedup();
-    build_nf_ranges(all_nfs)
-}
 
 /// Perform local proof construction from tier data (mirrors pir_client::fetch_proof_local).
 fn construct_proof(

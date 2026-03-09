@@ -24,6 +24,7 @@ use tracing::info;
 
 use imt_tree::hasher::PoseidonHasher;
 use imt_tree::tree::{build_levels, commit_ranges, precompute_empty_hashes, Range, TREE_DEPTH};
+use imt_tree::tree::build_nf_ranges;
 
 // Re-export tier-layout constants and PirMetadata from pir-types so that
 // existing consumers (tier submodules, tests, downstream crates) keep working.
@@ -274,4 +275,24 @@ pub fn export_all(tree: &PirTree, output_dir: &std::path::Path, height: Option<u
     info!("metadata written to pir_root.json");
 
     Ok(())
+}
+
+// ── Test utilities ───────────────────────────────────────────────────────────
+
+/// Build gap ranges from raw nullifiers with sentinel nullifiers injected.
+///
+/// Sentinels are 17 evenly-spaced points across the Pallas field (`k * 2^250`
+/// for k in 0..=16). This matches [`imt_tree::tree::build_sentinel_tree`] but
+/// returns the flat range vector instead of a full `NullifierTree`.
+///
+/// Available in tests and when the `test-util` feature is enabled.
+pub fn build_ranges_with_sentinels(raw_nfs: &[Fp]) -> Vec<Range> {
+    use ff::Field as _;
+    let step = Fp::from(2u64).pow([250, 0, 0, 0]);
+    let sentinels: Vec<Fp> = (0u64..=16).map(|k| step * Fp::from(k)).collect();
+    let mut all_nfs: Vec<Fp> = sentinels;
+    all_nfs.extend_from_slice(raw_nfs);
+    all_nfs.sort();
+    all_nfs.dedup();
+    build_nf_ranges(all_nfs)
 }

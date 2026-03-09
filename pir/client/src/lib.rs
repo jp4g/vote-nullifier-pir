@@ -617,19 +617,8 @@ pub fn fetch_proof_local(
 mod tests {
     use super::*;
     use ff::Field;
-    use imt_tree::tree::build_nf_ranges;
     use pasta_curves::Fp;
-
-    /// Sentinel-injected ranges matching the pir-export round_trip test pattern.
-    fn build_ranges_with_sentinels(raw_nfs: &[Fp]) -> Vec<[Fp; 2]> {
-        let step = Fp::from(2u64).pow([250, 0, 0, 0]);
-        let sentinels: Vec<Fp> = (0u64..=16).map(|k| step * Fp::from(k)).collect();
-        let mut all_nfs: Vec<Fp> = sentinels;
-        all_nfs.extend_from_slice(raw_nfs);
-        all_nfs.sort();
-        all_nfs.dedup();
-        build_nf_ranges(all_nfs)
-    }
+    use pir_export::build_ranges_with_sentinels;
 
     /// Build a tree and export all three tier blobs.
     struct TestFixture {

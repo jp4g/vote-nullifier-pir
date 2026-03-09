@@ -149,8 +149,8 @@ pub fn offset_for_height(dir: &Path, target_height: u64) -> Result<Option<(u64, 
     // so we can binary search.
     let entry = |i: usize| -> (u64, u64) {
         let off = i * INDEX_ENTRY_SIZE;
-        let h = u64::from_le_bytes(data[off..off + 8].try_into().unwrap());
-        let o = u64::from_le_bytes(data[off + 8..off + 16].try_into().unwrap());
+        let h = u64::from_le_bytes(data[off..off + 8].try_into().expect("index entry height slice"));
+        let o = u64::from_le_bytes(data[off + 8..off + 16].try_into().expect("index entry offset slice"));
         (h, o)
     };
 
@@ -237,8 +237,8 @@ pub fn load_checkpoint(dir: &Path) -> Result<Option<(u64, u64)>> {
             data.len()
         );
     }
-    let height = u64::from_le_bytes(data[..8].try_into().unwrap());
-    let offset = u64::from_le_bytes(data[8..].try_into().unwrap());
+    let height = u64::from_le_bytes(data[..8].try_into().expect("checkpoint height slice"));
+    let offset = u64::from_le_bytes(data[8..].try_into().expect("checkpoint offset slice"));
     Ok(Some((height, offset)))
 }
 
