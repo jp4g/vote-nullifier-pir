@@ -21,6 +21,7 @@ use anyhow::Result;
 use ff::PrimeField as _;
 use pasta_curves::Fp;
 use serde::{Deserialize, Serialize};
+use tracing::info;
 
 use imt_tree::hasher::PoseidonHasher;
 use imt_tree::tree::{build_levels, commit_ranges, precompute_empty_hashes, Range, TREE_DEPTH};
@@ -129,24 +130,24 @@ pub fn build_pir_tree(ranges: Vec<Range>) -> Result<PirTree> {
     );
     let t0 = Instant::now();
     let leaves = commit_ranges(&ranges);
-    eprintln!(
-        "  PIR leaf hashing: {} leaves in {:.1}s",
-        leaves.len(),
-        t0.elapsed().as_secs_f64()
+    info!(
+        count = leaves.len(),
+        elapsed_s = format!("{:.1}", t0.elapsed().as_secs_f64()),
+        "PIR leaf hashing"
     );
 
     let empty_hashes = precompute_empty_hashes();
 
     let t1 = Instant::now();
     let (root26, levels) = build_levels(leaves, &empty_hashes, PIR_DEPTH);
-    eprintln!(
-        "  PIR tree build ({} levels): {:.1}s",
-        levels.len(),
-        t1.elapsed().as_secs_f64()
+    info!(
+        level_count = levels.len(),
+        elapsed_s = format!("{:.1}", t1.elapsed().as_secs_f64()),
+        "PIR tree built"
     );
 
     let root29 = extend_root(root26, &empty_hashes);
-    eprintln!("  Depth-29 root: {}", hex::encode(root29.to_repr()));
+    info!(root29 = hex::encode(root29.to_repr()), "depth-29 root");
 
     Ok(PirTree {
         root26,
@@ -325,28 +326,20 @@ pub fn build_and_export_with_progress(
     on_progress("sorting nullifiers", 0);
     let t1 = std::time::Instant::now();
     let ranges = prepare_nullifiers(nfs);
-    eprintln!(
-        "  {} ranges built in {:.1}s",
-        ranges.len(),
-        t1.elapsed().as_secs_f64()
+    info!(
+        count = ranges.len(),
+        elapsed_s = format!("{:.1}", t1.elapsed().as_secs_f64()),
+        "ranges built"
     );
 
     on_progress("building Merkle tree", 15);
-    eprintln!("Building depth-{} PIR tree...", PIR_DEPTH);
+    info!(depth = PIR_DEPTH, "building PIR tree");
     let tree = build_pir_tree(ranges)?;
-    eprintln!(
-        "  Root-{}: {}",
-        PIR_DEPTH,
-        hex::encode(tree.root26.to_repr())
-    );
-    eprintln!(
-        "  Root-{}: {}",
-        FULL_DEPTH,
-        hex::encode(tree.root29.to_repr())
-    );
+    info!(depth = PIR_DEPTH, root = hex::encode(tree.root26.to_repr()), "root-26");
+    info!(depth = FULL_DEPTH, root = hex::encode(tree.root29.to_repr()), "root-29");
 
     on_progress("writing tier files", 40);
-    eprintln!("Exporting tier files to {:?}...", output_dir);
+    info!(?output_dir, "exporting tier files");
     export_all(&tree, output_dir, height)?;
 
     on_progress("tier files written", 55);
@@ -361,21 +354,21 @@ pub fn export_all(tree: &PirTree, output_dir: &std::path::Path, height: Option<u
     let t0 = Instant::now();
     let tier0_data = tier0::export(&tree.root26, &tree.levels, &tree.ranges, &tree.empty_hashes);
     std::fs::write(output_dir.join("tier0.bin"), &tier0_data)?;
-    eprintln!("  Tier 0 exported: {} bytes in {:.1}s", tier0_data.len(), t0.elapsed().as_secs_f64());
+    info!(bytes = tier0_data.len(), elapsed_s = format!("{:.1}", t0.elapsed().as_secs_f64()), "Tier 0 exported");
 
     // Tier 1
     let t1 = Instant::now();
     let mut f1 = std::io::BufWriter::new(std::fs::File::create(output_dir.join("tier1.bin"))?);
     tier1::export(&tree.levels, &tree.ranges, &tree.empty_hashes, &mut f1)?;
     f1.flush()?;
-    eprintln!("  Tier 1 exported in {:.1}s", t1.elapsed().as_secs_f64());
+    info!(elapsed_s = format!("{:.1}", t1.elapsed().as_secs_f64()), "Tier 1 exported");
 
     // Tier 2
     let t2 = Instant::now();
     let mut f2 = std::io::BufWriter::new(std::fs::File::create(output_dir.join("tier2.bin"))?);
     tier2::export(&tree.levels, &tree.ranges, &tree.empty_hashes, &mut f2)?;
     f2.flush()?;
-    eprintln!("  Tier 2 exported in {:.1}s", t2.elapsed().as_secs_f64());
+    info!(elapsed_s = format!("{:.1}", t2.elapsed().as_secs_f64()), "Tier 2 exported");
 
     // Metadata
     let metadata = PirMetadata {
@@ -392,7 +385,7 @@ pub fn export_all(tree: &PirTree, output_dir: &std::path::Path, height: Option<u
     };
     let json = serde_json::to_string_pretty(&metadata)?;
     std::fs::write(output_dir.join("pir_root.json"), json)?;
-    eprintln!("  Metadata written to pir_root.json");
+    info!("metadata written to pir_root.json");
 
     Ok(())
 }

@@ -47,7 +47,7 @@ pub fn export(
         write_row(levels, ranges, empty_hashes, s, &mut buf);
         writer.write_all(&buf)?;
         if s > 0 && s % PROGRESS_INTERVAL == 0 {
-            eprintln!("    Tier 2 progress: {}/{} rows", s, TIER2_ROWS);
+            tracing::info!(row = s, total = TIER2_ROWS, "Tier 2 export progress");
         }
     }
 

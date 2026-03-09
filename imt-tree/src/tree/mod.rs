@@ -6,6 +6,7 @@ use anyhow::Result;
 use ff::PrimeField as _;
 use pasta_curves::Fp;
 use rayon::prelude::*;
+use tracing::info;
 
 pub(crate) use crate::hasher::PoseidonHasher;
 pub use crate::proof::ImtProofData;
@@ -252,10 +253,10 @@ pub fn load_tree(path: &Path) -> Result<Vec<Range>> {
             [low, width]
         })
         .collect();
-    eprintln!(
-        "  File read: {} ranges loaded in {:.1}s",
-        ranges.len(),
-        t0.elapsed().as_secs_f64()
+    info!(
+        count = ranges.len(),
+        elapsed_s = format!("{:.1}", t0.elapsed().as_secs_f64()),
+        "ranges loaded from file"
     );
     Ok(ranges)
 }
@@ -309,12 +310,12 @@ pub fn save_full_tree(
     // Height trailer (0 means unknown)
     f.write_all(&height.unwrap_or(0).to_le_bytes())?;
 
-    eprintln!(
-        "  Full tree saved: {} ranges, {} levels, height={:?} in {:.1}s",
-        ranges.len(),
-        levels.len(),
-        height,
-        t0.elapsed().as_secs_f64(),
+    info!(
+        range_count = ranges.len(),
+        level_count = levels.len(),
+        ?height,
+        elapsed_s = format!("{:.1}", t0.elapsed().as_secs_f64()),
+        "full tree saved"
     );
     Ok(())
 }
@@ -328,10 +329,10 @@ pub fn save_full_tree(
 pub fn load_full_tree(path: &Path) -> Result<(Vec<Range>, Vec<Vec<Fp>>, Fp, Option<u64>)> {
     let t0 = Instant::now();
     let buf = std::fs::read(path)?;
-    eprintln!(
-        "  File read: {:.1} MB in {:.1}s",
-        buf.len() as f64 / (1024.0 * 1024.0),
-        t0.elapsed().as_secs_f64()
+    info!(
+        size_mb = format!("{:.1}", buf.len() as f64 / (1024.0 * 1024.0)),
+        elapsed_s = format!("{:.1}", t0.elapsed().as_secs_f64()),
+        "full tree file read"
     );
 
     let t1 = Instant::now();
@@ -400,12 +401,12 @@ pub fn load_full_tree(path: &Path) -> Result<(Vec<Range>, Vec<Vec<Fp>>, Fp, Opti
         None
     };
 
-    eprintln!(
-        "  Full tree parsed: {} ranges, {} levels, height={:?} in {:.1}s",
-        ranges.len(),
-        levels.len(),
-        height,
-        t1.elapsed().as_secs_f64()
+    info!(
+        range_count = ranges.len(),
+        level_count = levels.len(),
+        ?height,
+        elapsed_s = format!("{:.1}", t1.elapsed().as_secs_f64()),
+        "full tree parsed"
     );
 
     Ok((ranges, levels, root, height))

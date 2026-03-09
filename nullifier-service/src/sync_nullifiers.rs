@@ -3,6 +3,7 @@ use std::path::Path;
 use anyhow::Result;
 use tonic::transport::Channel;
 use tonic::Request;
+use tracing::info;
 
 use crate::download::connect_lwd;
 use crate::file_store;
@@ -83,10 +84,11 @@ fn resolve_target(start: u64, max_height: Option<u64>, chain_tip: u64) -> u64 {
     match max_height {
         Some(h) if h < start => {
             let next_multiple = ((start / BLOCK_ALIGNMENT) + 1) * BLOCK_ALIGNMENT;
-            eprintln!(
-                "SYNC_HEIGHT {} is below current checkpoint {}; \
-                 advancing target to next multiple of 10: {}",
-                h, start, next_multiple
+            info!(
+                sync_height = h,
+                checkpoint = start,
+                next_multiple,
+                "SYNC_HEIGHT below checkpoint, advancing target"
             );
             std::cmp::min(next_multiple, chain_tip)
         }
@@ -142,17 +144,14 @@ pub async fn sync(
     let target = resolve_target(start, max_height, chain_tip);
 
     if start > NU5_ACTIVATION_HEIGHT {
-        eprintln!(
-            "Resuming from checkpoint: height {} ({} nullifiers on disk)",
-            start, existing
-        );
+        info!(height = start, existing, "resuming from checkpoint");
     } else {
-        eprintln!("Starting fresh from NU5 activation height {}", NU5_ACTIVATION_HEIGHT);
+        info!(height = NU5_ACTIVATION_HEIGHT, "starting fresh from NU5 activation");
     }
     if let Some(h) = max_height {
-        eprintln!("Max height: {} (chain tip: {})", h, chain_tip);
+        info!(max_height = h, chain_tip, "max height set");
     }
-    eprintln!("Target: {} ({} blocks to sync)", target, target.saturating_sub(start));
+    info!(target, blocks_remaining = target.saturating_sub(start), "sync target");
 
     if start >= target {
         return Ok(SyncResult {
