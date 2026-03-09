@@ -52,7 +52,7 @@ graph TD
 | **pir-types** | `pir/types/` | Lightweight shared types (`YpirScenario`, `RootInfo`, `HealthInfo`) serialised over HTTP between server and client. Also contains YPIR wire-format helpers. |
 | **pir-export** | `pir/export/` | Builds the depth-26 PIR tree and exports it as three binary tier files (tier0, tier1, tier2) consumed by the server and client. |
 | **pir-server** | `pir/server/` | YPIR server-side logic: loads tier data, processes encrypted PIR queries, and returns encrypted responses. |
-| **pir-client** | `pir/client/` | YPIR client-side logic: generates encrypted queries, decodes responses, and assembles circuit-ready `ImtProofData`. Provides both async (`PirClient`) and blocking (`PirClientBlocking`) APIs. |
+| **pir-client** | `pir/client/` | YPIR client-side logic: generates encrypted queries, decodes responses, and assembles circuit-ready `ImtProofData`. Provides an async `PirClient` API and a local in-process mode. |
 | **nf-ingest** | `nf-ingest/` | Shared library for nullifier sync from lightwalletd, flat-file storage (`nullifiers.bin`), and configuration. |
 | **nf-server** | `nf-server/` | Unified CLI binary with `ingest`, `export`, and `serve` subcommands. The `serve` subcommand starts the PIR HTTP server (feature-gated). |
 | **pir-test** | `pir/test/` | End-to-end test harness with `small`, `local`, `server`, `compare`, and `bench` modes. |

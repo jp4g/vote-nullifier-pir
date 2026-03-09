@@ -285,6 +285,10 @@ impl PirClient {
     }
 
     /// Send a YPIR query for a tier row and return the decrypted row bytes.
+    /// This function handles the key client PIR operations:
+    /// 1. Generate keys
+    /// 2. Query
+    /// 3. Recover 
     async fn ypir_query(
         &self,
         scenario: &YpirScenario,
@@ -304,12 +308,15 @@ impl PirClient {
             true,
         );
 
+        // Generate PIR query from a fresh secret created from OsRng seed.
         let (query, seed) = ypir_client.generate_query_simplepir(row_idx);
         let gen_ms = t0.elapsed().as_secs_f64() * 1000.0;
 
+        // Serialize query
         let payload = serialize_ypir_query(query.0.as_slice(), query.1.as_slice());
         let upload_bytes = payload.len();
 
+        // Send the request
         let t1 = Instant::now();
         let url = format!("{}/{}/query", self.server_url, tier_name);
         let send_result = self.http.post(&url).body(payload).send().await;
@@ -341,6 +348,7 @@ impl PirClient {
             (send_ms - server_ms).max(0.0)
         });
 
+        // Decode the response from the server.
         let t2 = Instant::now();
         let decoded = ypir_client.decode_response_simplepir(seed, &response_bytes);
         let decode_ms = t2.elapsed().as_secs_f64() * 1000.0;
