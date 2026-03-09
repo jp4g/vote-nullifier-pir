@@ -1,8 +1,9 @@
-# vote-nullifier-pir
+# Vote Nullifier PIR
 
 Private Information Retrieval (PIR) system for Zcash nullifier non-membership proofs. Allows a client to prove that a nullifier does **not** exist in the on-chain nullifier set without revealing *which* nullifier it is querying — a key building block for shielded voting.
 
 - [ZIP Specification (PR)](https://github.com/zcash/zips/pull/1198)
+- [PIR Tree Specification](docs/pir-tree-spec.md)
 - [PIR Parameter Selection](docs/params.md)
 
 ## Architecture
@@ -23,9 +24,8 @@ graph TD
         pirClient[pir/client]
     end
 
-    subgraph binaries [Binaries / Test Harness]
+    subgraph binaries [Binaries]
         nfServer[nf-server]
-        pirTest[pir/test]
     end
 
     service --> imtTree
@@ -40,12 +40,6 @@ graph TD
     nfServer --> service
     nfServer --> imtTree
     nfServer -.->|optional serve| pirServer
-    pirTest --> pirTypes
-    pirTest --> pirExport
-    pirTest --> pirClient
-    pirTest --> pirServer
-    pirTest --> imtTree
-    pirTest --> service
 ```
 
 ### Crate Descriptions
