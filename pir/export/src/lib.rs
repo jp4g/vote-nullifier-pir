@@ -136,6 +136,35 @@ pub fn node_or_empty(levels: &[Vec<Fp>], level: usize, index: usize, empty_hashe
     }
 }
 
+/// Write BFS-ordered internal node hashes for a subtree into `buf`.
+///
+/// Iterates relative depths 1 through `num_layers - 1`. At each depth `d`,
+/// the bottom-up level is `bu_base - d` and the nodes are at global indices
+/// `subtree_index * 2^d .. subtree_index * 2^d + 2^d - 1`.
+///
+/// Returns the number of bytes written (`((2^num_layers) - 2) * 32`).
+pub fn write_internal_nodes(
+    levels: &[Vec<Fp>],
+    empty_hashes: &[Fp],
+    bu_base: usize,
+    num_layers: usize,
+    subtree_index: usize,
+    buf: &mut [u8],
+) -> usize {
+    let mut offset = 0;
+    for d in 1..num_layers {
+        let bu_level = bu_base - d;
+        let count = 1usize << d;
+        let start = subtree_index * count;
+        for i in 0..count {
+            let val = node_or_empty(levels, bu_level, start + i, empty_hashes);
+            write_fp(&mut buf[offset..], val);
+            offset += 32;
+        }
+    }
+    offset
+}
+
 /// Exponent used for sentinel nullifier spacing: `2^SENTINEL_EXPONENT`.
 const SENTINEL_EXPONENT: u64 = 250;
 

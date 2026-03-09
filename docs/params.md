@@ -44,7 +44,7 @@ pir-client              YPIRClient::from_db_sz(num_items, item_size_bits, true)
 
 ## Tree-layout constants
 
-> **File:** `pir/export/src/lib.rs`
+> **File:** `pir/types/src/lib.rs`
 
 These constants define the Merkle tree tier structure. They determine the
 number of rows and bytes-per-row that YPIR must support.

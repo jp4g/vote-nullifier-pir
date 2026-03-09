@@ -26,8 +26,8 @@ use pasta_curves::Fp;
 use imt_tree::tree::{Range, TREE_DEPTH};
 
 use crate::{
-    node_or_empty, subtree_min_key, write_fp, PIR_DEPTH, TIER0_LAYERS, TIER1_INTERNAL_NODES,
-    TIER1_LAYERS, TIER1_LEAVES, TIER1_ROWS, TIER1_ROW_BYTES, TIER2_LEAVES,
+    node_or_empty, subtree_min_key, write_fp, write_internal_nodes, PIR_DEPTH, TIER0_LAYERS,
+    TIER1_INTERNAL_NODES, TIER1_LAYERS, TIER1_LEAVES, TIER1_ROWS, TIER1_ROW_BYTES, TIER2_LEAVES,
 };
 
 pub use pir_types::tier1::Tier1Row;
@@ -65,23 +65,8 @@ fn write_row(
     buf.fill(0);
     let bu_base = PIR_DEPTH - TIER0_LAYERS; // 15: bottom-up level of subtree root
 
-    let mut offset = 0;
-
-    // ── Internal nodes: relative depths 1 through 7 ──────────────────────
-    //
-    // Relative depth d corresponds to bottom-up level (bu_base - d).
-    // At relative depth d, the subtree's nodes are at indices:
-    //   s * 2^d .. s * 2^d + 2^d - 1
-    for d in 1..TIER1_LAYERS {
-        let bu_level = bu_base - d;
-        let count = 1usize << d;
-        let start = s * count;
-        for i in 0..count {
-            let val = node_or_empty(levels, bu_level, start + i, empty_hashes);
-            write_fp(&mut buf[offset..], val);
-            offset += 32;
-        }
-    }
+    // ── Internal nodes: relative depths 1 through (TIER1_LAYERS - 1) ─────
+    let mut offset = write_internal_nodes(levels, empty_hashes, bu_base, TIER1_LAYERS, s, buf);
 
     debug_assert_eq!(offset, TIER1_INTERNAL_NODES * 32);
 

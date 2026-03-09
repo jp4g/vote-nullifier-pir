@@ -18,7 +18,8 @@ use pasta_curves::Fp;
 use imt_tree::tree::{Range, TREE_DEPTH};
 
 use crate::{
-    node_or_empty, subtree_min_key, write_fp, PIR_DEPTH, TIER0_LAYERS, TIER1_ROWS,
+    subtree_min_key, write_fp, write_internal_nodes, node_or_empty, PIR_DEPTH, TIER0_LAYERS,
+    TIER1_ROWS,
 };
 
 pub use pir_types::tier0::{Tier0Data, TIER0_BYTES, TIER0_INTERNAL_NODES};
@@ -38,21 +39,12 @@ pub fn export(
 
     // ── Internal nodes: depths 0 through 10 ──────────────────────────────
 
-    // Depth 0 = root
+    // Depth 0 = root (not part of the generic subtree loop)
     write_fp(&mut buf[offset..], *root);
     offset += 32;
 
-    // Depths 1 through 10.
-    // Depth d in plan notation (top-down) corresponds to bottom-up level (PIR_DEPTH - d).
-    for d in 1..=10 {
-        let bu_level = PIR_DEPTH - d; // bottom-up level
-        let count = 1usize << d;
-        for i in 0..count {
-            let val = node_or_empty(levels, bu_level, i, empty_hashes);
-            write_fp(&mut buf[offset..], val);
-            offset += 32;
-        }
-    }
+    // Depths 1 through 10 — the whole top of the tree is subtree 0 at bu_base = PIR_DEPTH.
+    offset += write_internal_nodes(levels, empty_hashes, PIR_DEPTH, TIER0_LAYERS, 0, &mut buf[offset..]);
 
     debug_assert_eq!(offset, TIER0_INTERNAL_NODES * 32);
 

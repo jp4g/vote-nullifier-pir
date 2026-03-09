@@ -756,18 +756,18 @@ mod tests {
     }
 
     #[test]
-    fn process_tier0_returns_error_for_out_of_range() {
+    fn process_tier0_handles_arbitrary_field_element() {
         let raw_nfs: Vec<Fp> = (1u64..=10).map(|i| Fp::from(i * 7)).collect();
         let fix = TestFixture::build(&raw_nfs);
         let tier0 = Tier0Data::from_bytes(fix.tier0_data).unwrap();
 
+        // Sentinel nullifiers span the field, so every non-nullifier value
+        // falls in some gap range. Verify this doesn't panic and returns a
+        // valid subtree index.
         let bogus = Fp::from(u64::MAX);
         let mut path = [Fp::default(); TREE_DEPTH];
-        let result = process_tier0(&tier0, bogus, &mut path);
-        assert!(
-            result.is_err() || result.is_ok(),
-            "should not panic on out-of-range value"
-        );
+        let s1 = process_tier0(&tier0, bogus, &mut path).unwrap();
+        assert!(s1 < pir_types::TIER1_ROWS);
     }
 
     // ── process_tier1 ────────────────────────────────────────────────────
