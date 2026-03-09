@@ -239,6 +239,7 @@ impl<'a> TierServer<'a> {
         })
     }
 
+    /// Return the YPIR scenario parameters for this tier.
     pub fn scenario(&self) -> &YpirScenario {
         &self.scenario
     }

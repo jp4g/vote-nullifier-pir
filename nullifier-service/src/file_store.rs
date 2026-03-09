@@ -66,14 +66,17 @@ const NULLIFIER_SIZE: usize = 32;
 const CHECKPOINT_SIZE: usize = 16;
 const INDEX_ENTRY_SIZE: usize = 16; // [u64 LE height][u64 LE offset]
 
+/// Path to the raw nullifier data file within `dir`.
 pub fn nullifiers_path(dir: &Path) -> PathBuf {
     dir.join("nullifiers.bin")
 }
 
+/// Path to the checkpoint file within `dir`.
 pub fn checkpoint_path(dir: &Path) -> PathBuf {
     dir.join("nullifiers.checkpoint")
 }
 
+/// Path to the height-to-offset index file within `dir`.
 pub fn index_path(dir: &Path) -> PathBuf {
     dir.join("nullifiers.index")
 }

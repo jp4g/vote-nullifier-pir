@@ -1,3 +1,5 @@
+//! `nf-server serve` — load tier files and start the PIR HTTP server.
+
 use std::sync::atomic::{AtomicU64, AtomicUsize};
 use std::sync::Arc;
 use std::path::PathBuf;

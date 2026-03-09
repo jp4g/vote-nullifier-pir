@@ -204,8 +204,11 @@ pub async fn sync(
 
 /// Result of a sync operation.
 pub struct SyncResult {
+    /// Chain tip height as reported by the first lightwalletd server.
     pub chain_tip: u64,
+    /// Number of blocks downloaded in this sync cycle.
     pub blocks_synced: u64,
+    /// Number of Orchard nullifiers appended in this sync cycle.
     pub nullifiers_synced: u64,
 }
 

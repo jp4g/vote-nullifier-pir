@@ -13,11 +13,17 @@ use super::state::{AppState, ServerPhase};
 
 // ── Snapshot management endpoints ─────────────────────────────────────────────
 
+/// Request body for `POST /snapshot/prepare`.
 #[derive(serde::Deserialize)]
 pub(crate) struct PrepareRequest {
+    /// Target block height to rebuild the snapshot at.
     height: u64,
 }
 
+/// Query the chain SDK for an active voting round.
+///
+/// Returns `Some(round_id)` if a round is currently active, `None` otherwise.
+/// Used to prevent rebuilds during active rounds which would invalidate proofs.
 async fn check_active_round(chain_url: &str) -> Result<Option<String>> {
     let url = format!("{}/shielded-vote/v1/rounds/active", chain_url.trim_end_matches('/'));
     let client = reqwest::Client::builder()

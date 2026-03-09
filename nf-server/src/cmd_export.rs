@@ -1,3 +1,5 @@
+//! `nf-server export` — build PIR tree from nullifier data and write tier files.
+
 use std::path::PathBuf;
 use std::time::Instant;
 

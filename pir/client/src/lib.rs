@@ -29,27 +29,42 @@ use ypir::client::YPIRClient;
 
 // ── Timing breakdown ─────────────────────────────────────────────────────────
 
-/// Per-tier timing breakdown for a single YPIR query.
+/// Per-tier timing breakdown for a single YPIR query, measuring each stage
+/// of the client-server round trip.
 struct TierTiming {
-    gen_ms: f64, // client-side query generation
+    /// Client-side YPIR query generation time.
+    gen_ms: f64,
+    /// Size of the uploaded query payload.
     upload_bytes: usize,
+    /// Size of the downloaded encrypted response.
     download_bytes: usize,
-    rtt_ms: f64,    // upload + server compute + download (wall clock)
-    decode_ms: f64, // client-side response decoding
+    /// Wall-clock round-trip time (upload + server compute + download).
+    rtt_ms: f64,
+    /// Client-side YPIR response decryption time.
+    decode_ms: f64,
+    /// Server-assigned request ID (from response header).
     server_req_id: Option<u64>,
+    /// Server-reported total processing time.
     server_total_ms: Option<f64>,
+    /// Server-reported query validation time.
     server_validate_ms: Option<f64>,
+    /// Server-reported decode+copy time.
     server_decode_copy_ms: Option<f64>,
+    /// Server-reported YPIR online computation time.
     server_compute_ms: Option<f64>,
+    /// Estimated network + queue latency (RTT minus server time).
     net_queue_ms: Option<f64>,
+    /// Estimated upload-to-server latency.
     upload_to_server_ms: Option<f64>,
+    /// Estimated download-from-server latency.
     download_from_server_ms: f64,
 }
 
-/// Per-note timing breakdown covering both tiers.
+/// Per-note timing breakdown covering both tier 1 and tier 2 YPIR queries.
 struct NoteTiming {
     tier1: TierTiming,
     tier2: TierTiming,
+    /// Total wall-clock time for this note's proof retrieval.
     total_ms: f64,
 }
 
@@ -70,6 +85,9 @@ pub struct PirClient {
     root29: Fp,
 }
 
+/// Return the number of populated leaves in a Tier 2 row, clamped to
+/// [`TIER2_LEAVES`]. The final row may be only partially filled when
+/// `num_ranges` is not a multiple of the row size.
 #[inline]
 fn valid_leaves_for_row(num_ranges: usize, row_idx: usize) -> usize {
     let row_start = row_idx.saturating_mul(TIER2_LEAVES);
@@ -438,6 +456,7 @@ impl PirClient {
     }
 }
 
+/// Parse an HTTP response header value as `f64`, returning `None` on missing or malformed values.
 fn parse_header_f64(headers: &reqwest::header::HeaderMap, name: &'static str) -> Option<f64> {
     headers
         .get(name)
@@ -445,6 +464,7 @@ fn parse_header_f64(headers: &reqwest::header::HeaderMap, name: &'static str) ->
         .and_then(|s| s.parse::<f64>().ok())
 }
 
+/// Parse an HTTP response header value as `u64`, returning `None` on missing or malformed values.
 fn parse_header_u64(headers: &reqwest::header::HeaderMap, name: &'static str) -> Option<u64> {
     headers
         .get(name)
