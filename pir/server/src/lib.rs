@@ -358,12 +358,21 @@ impl Drop for InflightGuard<'_> {
 /// Used by both `pir-server` and `nf-server` to expose server-side stage
 /// timing so the client can split RTT into server vs network/queue.
 pub fn write_timing_headers(headers: &mut axum::http::HeaderMap, req_id: u64, timing: QueryTiming) {
-    headers.insert("x-pir-req-id", HeaderValue::from_str(&req_id.to_string()).expect("req_id header"));
-    headers.insert("x-pir-server-total-ms", HeaderValue::from_str(&format!("{:.3}", timing.total_ms)).expect("timing header"));
-    headers.insert("x-pir-server-validate-ms", HeaderValue::from_str(&format!("{:.3}", timing.validate_ms)).expect("timing header"));
-    headers.insert("x-pir-server-decode-copy-ms", HeaderValue::from_str(&format!("{:.3}", timing.decode_copy_ms)).expect("timing header"));
-    headers.insert("x-pir-server-compute-ms", HeaderValue::from_str(&format!("{:.3}", timing.online_compute_ms)).expect("timing header"));
-    headers.insert("x-pir-server-response-bytes", HeaderValue::from_str(&timing.response_bytes.to_string()).expect("timing header"));
+    let entries: [(&str, String); 6] = [
+        ("x-pir-req-id", req_id.to_string()),
+        ("x-pir-server-total-ms", format!("{:.3}", timing.total_ms)),
+        ("x-pir-server-validate-ms", format!("{:.3}", timing.validate_ms)),
+        ("x-pir-server-decode-copy-ms", format!("{:.3}", timing.decode_copy_ms)),
+        ("x-pir-server-compute-ms", format!("{:.3}", timing.online_compute_ms)),
+        ("x-pir-server-response-bytes", timing.response_bytes.to_string()),
+    ];
+    for (name, value) in entries {
+        // HeaderValue::from_str only fails on non-visible-ASCII; numeric
+        // formatting always produces valid values.
+        if let Ok(hv) = HeaderValue::from_str(&value) {
+            headers.insert(name, hv);
+        }
+    }
 }
 
 /// Read a single row from a tier binary file on disk.

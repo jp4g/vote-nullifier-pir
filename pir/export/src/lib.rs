@@ -195,6 +195,11 @@ pub fn write_fp(buf: &mut [u8], fp: Fp) {
 }
 
 /// Read an Fp value from 32 little-endian bytes.
+///
+/// # Panics
+///
+/// Panics if the encoding is non-canonical. Callers must ensure the data
+/// has been validated with [`validate_all_fp_chunks`] before calling this.
 #[inline]
 pub(crate) fn read_fp(buf: &[u8]) -> Fp {
     let mut arr = [0u8; 32];

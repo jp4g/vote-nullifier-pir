@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, Path, State};
 use axum::http::StatusCode;
@@ -46,7 +46,7 @@ async fn main() -> Result<()> {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("./pir-data"));
     let port: u16 = match std::env::args().nth(2) {
-        Some(s) => s.parse().expect("invalid port number"),
+        Some(s) => s.parse().context("invalid port number")?,
         None => DEFAULT_PORT,
     };
 
