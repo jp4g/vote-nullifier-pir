@@ -36,12 +36,14 @@ pub struct HealthInfo {
     pub tier2_row_bytes: usize,
 }
 
+const U64_BYTES: usize = std::mem::size_of::<u64>();
+
 /// Serialize a YPIR SimplePIR query into the wire format expected by `pir-server`.
 ///
 /// Layout: `[8-byte LE pqr_byte_len][pqr as LE u64s][pub_params as LE u64s]`
 pub fn serialize_ypir_query(pqr: &[u64], pub_params: &[u64]) -> Vec<u8> {
-    let pqr_byte_len = pqr.len() * 8;
-    let mut payload = Vec::with_capacity(8 + (pqr.len() + pub_params.len()) * 8);
+    let pqr_byte_len = pqr.len() * U64_BYTES;
+    let mut payload = Vec::with_capacity(U64_BYTES + (pqr.len() + pub_params.len()) * U64_BYTES);
     payload.extend_from_slice(&(pqr_byte_len as u64).to_le_bytes());
     for &v in pqr {
         payload.extend_from_slice(&v.to_le_bytes());

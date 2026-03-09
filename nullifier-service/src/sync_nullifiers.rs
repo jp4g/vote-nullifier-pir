@@ -15,6 +15,9 @@ pub const NU5_ACTIVATION_HEIGHT: u64 = 1_687_104;
 /// How many blocks to request per gRPC streaming call.
 const BATCH_SIZE: u64 = 10_000;
 
+/// Block-height granularity used when aligning sync targets.
+const BLOCK_ALIGNMENT: u64 = 10;
+
 /// Fetch the current chain tip height from a lightwalletd server.
 ///
 /// Connects to the given URL and calls `GetLatestBlock`. Returns the height
@@ -112,7 +115,7 @@ pub async fn sync(
     // there is always a clean forward stopping point.
     let target = match max_height {
         Some(h) if h < start => {
-            let next_multiple = ((start / 10) + 1) * 10;
+            let next_multiple = ((start / BLOCK_ALIGNMENT) + 1) * BLOCK_ALIGNMENT;
             eprintln!(
                 "SYNC_HEIGHT {} is below current checkpoint {}; \
                  advancing target to next multiple of 10: {}",

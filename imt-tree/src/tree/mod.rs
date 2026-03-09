@@ -24,6 +24,12 @@ mod tests;
 /// needs capacity for ~2^28 leaves: `log2(256 << 20) + 1 = 29`.
 pub const TREE_DEPTH: usize = 29;
 
+/// Byte size of one serialized `Fp` field element (Pallas base field).
+const FP_BYTES: usize = 32;
+
+/// Byte size of one serialized `Range` (`[low, width]` = 2 `Fp` values).
+const RANGE_BYTES: usize = FP_BYTES * 2;
+
 /// A gap range `[low, width]` representing an interval between two adjacent
 /// on-chain nullifiers. `low` is the interval start and `width = high - low`
 /// where `high` is the inclusive upper bound. Each leaf in the Merkle tree
@@ -227,18 +233,18 @@ pub fn load_tree(path: &Path) -> Result<Vec<Range>> {
     let buf = std::fs::read(path)?;
     anyhow::ensure!(buf.len() >= 8, "tree file too small");
     let count = u64::from_le_bytes(buf[..8].try_into().unwrap()) as usize;
-    let expected = 8 + count * 64;
+    let expected = 8 + count * RANGE_BYTES;
     anyhow::ensure!(
         buf.len() >= expected,
         "tree file truncated: expected {} bytes, got {}",
         expected,
         buf.len()
     );
-    let ranges: Vec<Range> = buf[8..8 + count * 64]
-        .par_chunks_exact(64)
+    let ranges: Vec<Range> = buf[8..8 + count * RANGE_BYTES]
+        .par_chunks_exact(RANGE_BYTES)
         .map(|chunk| {
-            let low = Fp::from_repr(chunk[..32].try_into().unwrap()).unwrap();
-            let width = Fp::from_repr(chunk[32..64].try_into().unwrap()).unwrap();
+            let low = Fp::from_repr(chunk[..FP_BYTES].try_into().unwrap()).unwrap();
+            let width = Fp::from_repr(chunk[FP_BYTES..RANGE_BYTES].try_into().unwrap()).unwrap();
             [low, width]
         })
         .collect();
@@ -340,13 +346,13 @@ pub fn load_full_tree(path: &Path) -> Result<(Vec<Range>, Vec<Vec<Fp>>, Fp, Opti
 
     // Ranges
     let range_count = u64::from_le_bytes(read_bytes!(8).try_into().unwrap()) as usize;
-    let range_bytes = &buf[pos..pos + range_count * 64];
-    pos += range_count * 64;
+    let range_bytes = &buf[pos..pos + range_count * RANGE_BYTES];
+    pos += range_count * RANGE_BYTES;
     let ranges: Vec<Range> = range_bytes
-        .par_chunks_exact(64)
+        .par_chunks_exact(RANGE_BYTES)
         .map(|chunk| {
-            let low = Fp::from_repr(chunk[..32].try_into().unwrap()).unwrap();
-            let width = Fp::from_repr(chunk[32..64].try_into().unwrap()).unwrap();
+            let low = Fp::from_repr(chunk[..FP_BYTES].try_into().unwrap()).unwrap();
+            let width = Fp::from_repr(chunk[FP_BYTES..RANGE_BYTES].try_into().unwrap()).unwrap();
             [low, width]
         })
         .collect();
@@ -355,20 +361,20 @@ pub fn load_full_tree(path: &Path) -> Result<(Vec<Range>, Vec<Vec<Fp>>, Fp, Opti
     let mut levels: Vec<Vec<Fp>> = Vec::with_capacity(TREE_DEPTH);
     for _ in 0..TREE_DEPTH {
         let level_len = u64::from_le_bytes(read_bytes!(8).try_into().unwrap()) as usize;
-        let level_bytes = &buf[pos..pos + level_len * 32];
-        pos += level_len * 32;
+        let level_bytes = &buf[pos..pos + level_len * FP_BYTES];
+        pos += level_len * FP_BYTES;
         let level: Vec<Fp> = level_bytes
-            .par_chunks_exact(32)
+            .par_chunks_exact(FP_BYTES)
             .map(|chunk| Fp::from_repr(chunk.try_into().unwrap()).unwrap())
             .collect();
         levels.push(level);
     }
 
     // Root
-    let root_bytes: [u8; 32] = buf[pos..pos + 32].try_into()
+    let root_bytes: [u8; FP_BYTES] = buf[pos..pos + FP_BYTES].try_into()
         .map_err(|_| anyhow::anyhow!("unexpected EOF reading root"))?;
     let root = Fp::from_repr(root_bytes).unwrap();
-    pos += 32;
+    pos += FP_BYTES;
 
     // Height trailer (optional, backwards-compatible with old files)
     let height = if pos + 8 <= buf.len() {

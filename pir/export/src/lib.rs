@@ -273,6 +273,12 @@ pub fn binary_search_records(
     if lo == 0 { None } else { Some(lo - 1) }
 }
 
+/// Exponent used for sentinel nullifier spacing: `2^SENTINEL_EXPONENT`.
+const SENTINEL_EXPONENT: u64 = 250;
+
+/// Number of sentinel nullifiers injected: `0, 1*step, 2*step, ..., SENTINEL_COUNT*step`.
+const SENTINEL_COUNT: u64 = 16;
+
 /// Sort raw nullifiers, inject circuit-required sentinels, and build gap ranges.
 ///
 /// The sentinel values at `k * 2^250` for `k = 0..=16` are required by the
@@ -282,8 +288,8 @@ pub fn prepare_nullifiers(mut nfs: Vec<Fp>) -> Vec<Range> {
     use ff::Field;
 
     nfs.sort();
-    let step = Fp::from(2u64).pow([250, 0, 0, 0]);
-    let sentinels: Vec<Fp> = (0u64..=16).map(|k| step * Fp::from(k)).collect();
+    let step = Fp::from(2u64).pow([SENTINEL_EXPONENT, 0, 0, 0]);
+    let sentinels: Vec<Fp> = (0u64..=SENTINEL_COUNT).map(|k| step * Fp::from(k)).collect();
     nfs.extend(sentinels);
     nfs.sort();
     nfs.dedup();

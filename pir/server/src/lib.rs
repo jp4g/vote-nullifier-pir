@@ -24,6 +24,9 @@ pub use pir_export::{
     TIER1_ITEM_BITS, TIER1_ROWS, TIER1_ROW_BYTES, TIER2_ITEM_BITS, TIER2_ROWS, TIER2_ROW_BYTES,
 };
 
+const U64_BYTES: usize = std::mem::size_of::<u64>();
+const AVX512_ALIGN: usize = 64;
+
 /// 64-byte aligned u64 buffer for AVX-512 operations.
 struct Aligned64 {
     ptr: *mut u64,
@@ -34,8 +37,8 @@ struct Aligned64 {
 impl Aligned64 {
     fn new(len: usize) -> Self {
         assert!(len > 0, "Aligned64::new called with zero length");
-        let size = len.checked_mul(8).expect("Aligned64 size overflow");
-        let layout = Layout::from_size_align(size, 64).expect("Aligned64 invalid layout");
+        let size = len.checked_mul(U64_BYTES).expect("Aligned64 size overflow");
+        let layout = Layout::from_size_align(size, AVX512_ALIGN).expect("Aligned64 invalid layout");
         let ptr = unsafe { alloc_zeroed(layout) as *mut u64 };
         if ptr.is_null() {
             handle_alloc_error(layout);
@@ -174,10 +177,10 @@ impl<'a> TierServer<'a> {
             "query too short: {} bytes",
             query_bytes.len()
         );
-        let pqr_byte_len = u64::from_le_bytes(query_bytes[..8].try_into().unwrap()) as usize;
-        let payload_len = query_bytes.len() - 8; // safe: checked >= 8
+        let pqr_byte_len = u64::from_le_bytes(query_bytes[..U64_BYTES].try_into().unwrap()) as usize;
+        let payload_len = query_bytes.len() - U64_BYTES;
         anyhow::ensure!(
-            pqr_byte_len % 8 == 0,
+            pqr_byte_len % U64_BYTES == 0,
             "pqr_byte_len {} not a multiple of 8",
             pqr_byte_len
         );
@@ -191,24 +194,24 @@ impl<'a> TierServer<'a> {
         anyhow::ensure!(pqr_byte_len > 0, "pqr section is empty");
         anyhow::ensure!(remaining > 0, "pub_params section is empty");
         anyhow::ensure!(
-            remaining % 8 == 0,
-            "pub_params section {} bytes not a multiple of 8",
-            remaining
+            remaining % U64_BYTES == 0,
+            "pub_params section {} bytes not a multiple of {}",
+            remaining, U64_BYTES
         );
         let validate_ms = validate_start.elapsed().as_secs_f64() * 1000.0;
 
-        let pqr_u64_len = pqr_byte_len / 8;
-        let pp_u64_len = remaining / 8;
+        let pqr_u64_len = pqr_byte_len / U64_BYTES;
+        let pp_u64_len = remaining / U64_BYTES;
 
         // Copy into 64-byte aligned memory for AVX-512 operations.
         let decode_start = Instant::now();
         let mut pqr = Aligned64::new(pqr_u64_len);
-        for (i, chunk) in query_bytes[8..8 + pqr_byte_len].chunks_exact(8).enumerate() {
+        for (i, chunk) in query_bytes[U64_BYTES..U64_BYTES + pqr_byte_len].chunks_exact(U64_BYTES).enumerate() {
             pqr.as_mut_slice()[i] = u64::from_le_bytes(chunk.try_into().unwrap());
         }
 
         let mut pub_params = Aligned64::new(pp_u64_len);
-        for (i, chunk) in query_bytes[8 + pqr_byte_len..].chunks_exact(8).enumerate() {
+        for (i, chunk) in query_bytes[U64_BYTES + pqr_byte_len..].chunks_exact(U64_BYTES).enumerate() {
             pub_params.as_mut_slice()[i] = u64::from_le_bytes(chunk.try_into().unwrap());
         }
         let decode_copy_ms = decode_start.elapsed().as_secs_f64() * 1000.0;

@@ -29,6 +29,8 @@ use crate::{
     TIER2_LAYERS, TIER2_LEAVES, TIER2_ROWS, TIER2_ROW_BYTES,
 };
 
+const PROGRESS_INTERVAL: usize = 100_000;
+
 /// Export all Tier 2 rows to a writer.
 ///
 /// Rows are computed and written one at a time to avoid materializing all rows
@@ -44,7 +46,7 @@ pub fn export(
     for s in 0..TIER2_ROWS {
         write_row(levels, ranges, empty_hashes, s, &mut buf);
         writer.write_all(&buf)?;
-        if s > 0 && s % 100_000 == 0 {
+        if s > 0 && s % PROGRESS_INTERVAL == 0 {
             eprintln!("    Tier 2 progress: {}/{} rows", s, TIER2_ROWS);
         }
     }
