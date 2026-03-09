@@ -7,9 +7,8 @@
 //! Usage: `pir-server [PIR_DATA_DIR] [PORT]`
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize};
 use std::sync::Arc;
-use std::time::Instant;
 
 use anyhow::{Context, Result};
 use axum::body::Bytes;
@@ -23,11 +22,11 @@ const MAX_BODY_BYTES: usize = 512 * 1024 * 1024;
 const DEFAULT_PORT: u16 = 3001;
 
 use pir_server::{
-    HealthInfo, InflightGuard, RootInfo, ServingState,
+    HealthInfo, RootInfo, ServingState,
     TIER1_ROWS, TIER1_ROW_BYTES, TIER2_ROWS, TIER2_ROW_BYTES,
-    read_tier_row, write_timing_headers,
+    read_tier_row, dispatch_query,
 };
-use tracing::{info, warn};
+use tracing::info;
 
 /// Shared application state: loaded tier data plus per-process counters.
 struct AppState {
@@ -115,62 +114,11 @@ async fn get_hint_tier2(State(state): State<Arc<AppState>>) -> impl IntoResponse
 }
 
 async fn post_tier1_query(State(state): State<Arc<AppState>>, body: Bytes) -> impl IntoResponse {
-    post_tier_query(&state, "tier1", body)
+    dispatch_query(&state.serving.tier1, "tier1", &body, &state.next_req_id, &state.inflight_requests)
 }
 
 async fn post_tier2_query(State(state): State<Arc<AppState>>, body: Bytes) -> impl IntoResponse {
-    post_tier_query(&state, "tier2", body)
-}
-
-fn post_tier_query(state: &AppState, tier: &str, body: Bytes) -> axum::response::Response {
-    let req_id = state.next_req_id.fetch_add(1, Ordering::Relaxed) + 1;
-    let inflight = state.inflight_requests.fetch_add(1, Ordering::Relaxed) + 1;
-    let _inflight_guard = InflightGuard::new(&state.inflight_requests);
-    let t0 = Instant::now();
-    info!(req_id, tier, body_bytes = body.len(), inflight_requests = inflight, "pir_request_started");
-
-    let server = match tier {
-        "tier1" => state.serving.tier1.server(),
-        "tier2" => state.serving.tier2.server(),
-        _ => unreachable!(),
-    };
-
-    match server.answer_query(&body) {
-        Ok(answer) => {
-            let handler_ms = t0.elapsed().as_secs_f64() * 1000.0;
-            let mut response = (
-                StatusCode::OK,
-                [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
-                answer.response,
-            )
-                .into_response();
-            write_timing_headers(response.headers_mut(), req_id, answer.timing);
-            info!(
-                req_id,
-                tier,
-                status = 200,
-                handler_ms = format!("{handler_ms:.3}"),
-                validate_ms = format!("{:.3}", answer.timing.validate_ms),
-                decode_copy_ms = format!("{:.3}", answer.timing.decode_copy_ms),
-                compute_ms = format!("{:.3}", answer.timing.online_compute_ms),
-                server_total_ms = format!("{:.3}", answer.timing.total_ms),
-                response_bytes = answer.timing.response_bytes,
-                "pir_request_finished"
-            );
-            response
-        }
-        Err(e) => {
-            warn!(
-                req_id,
-                tier,
-                status = 400,
-                handler_ms = format!("{:.3}", t0.elapsed().as_secs_f64() * 1000.0),
-                error = %e,
-                "pir_request_failed"
-            );
-            (StatusCode::BAD_REQUEST, e.to_string()).into_response()
-        }
-    }
+    dispatch_query(&state.serving.tier2, "tier2", &body, &state.next_req_id, &state.inflight_requests)
 }
 
 async fn get_tier1_row(

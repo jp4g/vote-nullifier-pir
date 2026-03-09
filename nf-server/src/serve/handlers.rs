@@ -4,20 +4,17 @@
 //! server is currently rebuilding its snapshot. The YPIR query endpoints
 //! track inflight request counts for backpressure monitoring.
 
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::time::Instant;
 
 use axum::body::Bytes;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use tracing::{info, warn};
 
 use pir_server::{
-    HealthInfo, InflightGuard, RootInfo,
+    HealthInfo, RootInfo,
     TIER1_ROWS, TIER1_ROW_BYTES, TIER2_ROWS, TIER2_ROW_BYTES,
-    read_tier_row, write_timing_headers,
+    read_tier_row, dispatch_query,
 };
 
 use super::state::{AppState, ServerPhase};
@@ -75,79 +72,16 @@ pub(crate) async fn get_hint_tier2(State(state): State<Arc<AppState>>) -> impl I
 
 /// `POST /tier1/query` — Process an encrypted YPIR query against Tier 1.
 pub(crate) async fn post_tier1_query(State(state): State<Arc<AppState>>, body: Bytes) -> impl IntoResponse {
-    post_tier_query(&state, "tier1", body).await
+    let guard = require_serving!(state);
+    let s = guard.as_ref().expect("guaranteed Some by require_serving");
+    dispatch_query(&s.tier1, "tier1", &body, &state.next_req_id, &state.inflight_requests)
 }
 
 /// `POST /tier2/query` — Process an encrypted YPIR query against Tier 2.
 pub(crate) async fn post_tier2_query(State(state): State<Arc<AppState>>, body: Bytes) -> impl IntoResponse {
-    post_tier_query(&state, "tier2", body).await
-}
-
-/// Shared handler for YPIR queries. Dispatches to the appropriate tier server,
-/// tracks inflight request count, and writes timing headers on the response.
-async fn post_tier_query(state: &AppState, tier: &str, body: Bytes) -> axum::response::Response {
-    let req_id = state.next_req_id.fetch_add(1, Ordering::Relaxed) + 1;
-    let inflight = state.inflight_requests.fetch_add(1, Ordering::Relaxed) + 1;
-    let _inflight_guard = InflightGuard::new(&state.inflight_requests);
-    let t0 = Instant::now();
-
-    let guard = state.serving.read().await;
-    if guard.is_none() {
-        let phase = state.phase.read().await;
-        let body = serde_json::to_string(&*phase).unwrap_or_default();
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            [(axum::http::header::CONTENT_TYPE, "application/json")],
-            body,
-        )
-            .into_response();
-    }
-    let s = guard.as_ref().expect("checked is_none above");
-
-    info!(req_id, tier, body_bytes = body.len(), inflight_requests = inflight, "pir_request_started");
-
-    let server = match tier {
-        "tier1" => s.tier1.server(),
-        "tier2" => s.tier2.server(),
-        _ => unreachable!(),
-    };
-
-    match server.answer_query(&body) {
-        Ok(answer) => {
-            let handler_ms = t0.elapsed().as_secs_f64() * 1000.0;
-            let mut response = (
-                StatusCode::OK,
-                [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
-                answer.response,
-            )
-                .into_response();
-            write_timing_headers(response.headers_mut(), req_id, answer.timing);
-            info!(
-                req_id,
-                tier,
-                status = 200,
-                handler_ms = format!("{handler_ms:.3}"),
-                validate_ms = format!("{:.3}", answer.timing.validate_ms),
-                decode_copy_ms = format!("{:.3}", answer.timing.decode_copy_ms),
-                compute_ms = format!("{:.3}", answer.timing.online_compute_ms),
-                server_total_ms = format!("{:.3}", answer.timing.total_ms),
-                response_bytes = answer.timing.response_bytes,
-                "pir_request_finished"
-            );
-            response
-        }
-        Err(e) => {
-            warn!(
-                req_id,
-                tier,
-                status = 400,
-                handler_ms = format!("{:.3}", t0.elapsed().as_secs_f64() * 1000.0),
-                error = %e,
-                "pir_request_failed"
-            );
-            (StatusCode::BAD_REQUEST, e.to_string()).into_response()
-        }
-    }
+    let guard = require_serving!(state);
+    let s = guard.as_ref().expect("guaranteed Some by require_serving");
+    dispatch_query(&s.tier2, "tier2", &body, &state.next_req_id, &state.inflight_requests)
 }
 
 // ── Tier row endpoints (raw row reads for debugging) ─────────────────────────

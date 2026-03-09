@@ -333,8 +333,10 @@ unsafe impl Sync for OwnedTierState {}
 
 // ── Shared HTTP helpers ──────────────────────────────────────────────────────
 
-use axum::http::HeaderValue;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use axum::http::{HeaderValue, StatusCode};
+use axum::response::IntoResponse;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use tracing::warn;
 
 /// RAII guard that decrements an atomic inflight counter on drop.
 pub struct InflightGuard<'a> {
@@ -383,6 +385,62 @@ pub fn read_tier_row(path: &std::path::Path, offset: u64, len: usize) -> std::io
     let mut buf = vec![0u8; len];
     f.read_exact(&mut buf)?;
     Ok(buf)
+}
+
+/// Process a PIR query against a tier server with inflight tracking,
+/// structured logging, and timing response headers.
+///
+/// Shared between `pir-server` (standalone binary) and `nf-server serve`.
+/// Callers resolve the `ServingState` and pass the relevant `OwnedTierState`.
+pub fn dispatch_query(
+    tier_state: &OwnedTierState,
+    tier: &str,
+    body: &[u8],
+    next_req_id: &AtomicU64,
+    inflight_requests: &AtomicUsize,
+) -> axum::response::Response {
+    let req_id = next_req_id.fetch_add(1, Ordering::Relaxed) + 1;
+    let inflight = inflight_requests.fetch_add(1, Ordering::Relaxed) + 1;
+    let _inflight_guard = InflightGuard::new(inflight_requests);
+    let t0 = Instant::now();
+    info!(req_id, tier, body_bytes = body.len(), inflight_requests = inflight, "pir_request_started");
+
+    match tier_state.server().answer_query(body) {
+        Ok(answer) => {
+            let handler_ms = t0.elapsed().as_secs_f64() * 1000.0;
+            let mut response = (
+                StatusCode::OK,
+                [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
+                answer.response,
+            )
+                .into_response();
+            write_timing_headers(response.headers_mut(), req_id, answer.timing);
+            info!(
+                req_id,
+                tier,
+                status = 200,
+                handler_ms = format!("{handler_ms:.3}"),
+                validate_ms = format!("{:.3}", answer.timing.validate_ms),
+                decode_copy_ms = format!("{:.3}", answer.timing.decode_copy_ms),
+                compute_ms = format!("{:.3}", answer.timing.online_compute_ms),
+                server_total_ms = format!("{:.3}", answer.timing.total_ms),
+                response_bytes = answer.timing.response_bytes,
+                "pir_request_finished"
+            );
+            response
+        }
+        Err(e) => {
+            warn!(
+                req_id,
+                tier,
+                status = 400,
+                handler_ms = format!("{:.3}", t0.elapsed().as_secs_f64() * 1000.0),
+                error = %e,
+                "pir_request_failed"
+            );
+            (StatusCode::BAD_REQUEST, e.to_string()).into_response()
+        }
+    }
 }
 
 // ── ServingState ─────────────────────────────────────────────────────────────
