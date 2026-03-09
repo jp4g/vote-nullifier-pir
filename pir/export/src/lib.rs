@@ -124,42 +124,7 @@ pub fn subtree_min_key(ranges: &[Range], leaf_start: usize) -> Fp {
     }
 }
 
-/// Write an Fp value as 32 little-endian bytes into `buf`.
-#[inline]
-pub fn write_fp(buf: &mut [u8], fp: Fp) {
-    buf[..32].copy_from_slice(&fp.to_repr());
-}
-
-/// Read an Fp value from 32 little-endian bytes.
-///
-/// # Panics
-///
-/// Panics if the encoding is non-canonical. Callers must ensure the data
-/// has been validated with [`validate_all_fp_chunks`] before calling this.
-#[inline]
-pub(crate) fn read_fp(buf: &[u8]) -> Fp {
-    let mut arr = [0u8; 32];
-    arr.copy_from_slice(&buf[..32]);
-    Fp::from_repr(arr).expect("read_fp: non-canonical Fp (caller must validate first)")
-}
-
-/// Validate that a 32-byte slice is a canonical Fp encoding.
-#[inline]
-pub fn validate_fp_bytes(buf: &[u8]) -> anyhow::Result<()> {
-    anyhow::ensure!(
-        buf.len() == 32,
-        "invalid field element byte length: got {}, expected 32",
-        buf.len()
-    );
-    let mut arr = [0u8; 32];
-    arr.copy_from_slice(buf);
-    let fp = Fp::from_repr(arr);
-    anyhow::ensure!(
-        bool::from(fp.is_some()),
-        "non-canonical field element encoding"
-    );
-    Ok(())
-}
+pub use pir_types::fp_utils::write_fp;
 
 /// Get a node hash from the tree levels, returning empty_hash if out of bounds.
 #[inline]
@@ -169,49 +134,6 @@ pub fn node_or_empty(levels: &[Vec<Fp>], level: usize, index: usize, empty_hashe
     } else {
         empty_hashes[level]
     }
-}
-
-/// Validate that every 32-byte chunk in `data` is a canonical Fp encoding.
-///
-/// Used by `Tier0Data::from_bytes`, `Tier1Row::from_bytes`, and `Tier2Row::from_bytes`
-/// to reject tier data containing non-canonical field elements.
-pub fn validate_all_fp_chunks(data: &[u8], tier_label: &str) -> anyhow::Result<()> {
-    for (i, chunk) in data.chunks_exact(32).enumerate() {
-        validate_fp_bytes(chunk).map_err(|e| {
-            anyhow::anyhow!("{} invalid field element at 32-byte chunk {}: {}", tier_label, i, e)
-        })?;
-    }
-    Ok(())
-}
-
-/// Binary search a sequence of 64-byte records for the last entry whose key <= `value`.
-///
-/// Each record has a 32-byte key at offset `key_offset_in_record` within the record.
-/// `base` is the byte offset in `data` where the record array starts.
-/// `count` is the number of records.
-///
-/// Returns `Some(index)` of the last record with key <= value, or `None` if all keys > value.
-pub fn binary_search_records(
-    data: &[u8],
-    base: usize,
-    count: usize,
-    record_size: usize,
-    key_offset: usize,
-    value: Fp,
-) -> Option<usize> {
-    let mut lo = 0usize;
-    let mut hi = count;
-    while lo < hi {
-        let mid = lo + (hi - lo) / 2;
-        let k_off = base + mid * record_size + key_offset;
-        let k = read_fp(&data[k_off..k_off + 32]);
-        if k <= value {
-            lo = mid + 1;
-        } else {
-            hi = mid;
-        }
-    }
-    if lo == 0 { None } else { Some(lo - 1) }
 }
 
 /// Exponent used for sentinel nullifier spacing: `2^SENTINEL_EXPONENT`.

@@ -16,9 +16,9 @@ use imt_tree::tree::{precompute_empty_hashes, TREE_DEPTH};
 // returned by PirClientBlocking::fetch_proof without a direct imt-tree dependency.
 pub use imt_tree::ImtProofData;
 
-use pir_export::tier0::Tier0Data;
-use pir_export::tier1::Tier1Row;
-use pir_export::tier2::Tier2Row;
+use pir_types::tier0::Tier0Data;
+use pir_types::tier1::Tier1Row;
+use pir_types::tier2::Tier2Row;
 use pir_types::{
     serialize_ypir_query, RootInfo, YpirScenario, PIR_DEPTH, TIER0_LAYERS, TIER1_LAYERS,
     TIER1_LEAVES, TIER1_ROW_BYTES, TIER2_LEAVES, TIER2_ROW_BYTES,
@@ -740,7 +740,7 @@ mod tests {
         let mut path = [Fp::default(); TREE_DEPTH];
         let s1 = process_tier0(&tier0, value, &mut path).unwrap();
 
-        assert!(s1 < pir_export::TIER1_ROWS);
+        assert!(s1 < pir_types::TIER1_ROWS);
 
         let tier0_region = &path[PIR_DEPTH - TIER0_LAYERS..PIR_DEPTH];
         assert!(

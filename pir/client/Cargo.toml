@@ -5,10 +5,10 @@ edition = "2021"
 
 [dev-dependencies]
 rand = "0.8"
+pir-export = { path = "../export" }
 
 [dependencies]
-pir-types  = { path = "../types" }
-pir-export = { path = "../export" }
+pir-types  = { path = "../types", features = ["reader"] }
 imt-tree = { path = "../../imt-tree" }
 ypir = { git = "https://github.com/menonsamir/ypir.git", branch = "artifact", default-features = false }
 hex = "0.4"

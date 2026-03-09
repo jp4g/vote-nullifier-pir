@@ -4,10 +4,20 @@
 //! Tier-layout constants define the data-format contract shared by all crates
 //! (export, server, client, test).
 //!
-//! This crate is intentionally lightweight (only depends on `serde`) so that
-//! any PIR crate can depend on it without pulling in heavy crypto libraries.
+//! The default feature set is lightweight (only `serde`). Enable the `reader`
+//! feature to get tier-data parsers ([`tier0::Tier0Data`], [`tier1::Tier1Row`],
+//! [`tier2::Tier2Row`]) and Fp serialization helpers ([`fp_utils`]).
 
 use serde::{Deserialize, Serialize};
+
+#[cfg(feature = "reader")]
+pub mod fp_utils;
+#[cfg(feature = "reader")]
+pub mod tier0;
+#[cfg(feature = "reader")]
+pub mod tier1;
+#[cfg(feature = "reader")]
+pub mod tier2;
 
 // ── Tier-layout constants ────────────────────────────────────────────────────
 

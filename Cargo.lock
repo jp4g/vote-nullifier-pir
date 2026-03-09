@@ -1785,6 +1785,10 @@ dependencies = [
 name = "pir-types"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "ff",
+ "imt-tree",
+ "pasta_curves",
  "serde",
 ]
 

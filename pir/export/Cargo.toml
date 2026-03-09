@@ -11,7 +11,7 @@ default = []
 cli = ["dep:nf-ingest"]
 
 [dependencies]
-pir-types = { path = "../types" }
+pir-types = { path = "../types", features = ["reader"] }
 imt-tree = { path = "../../imt-tree" }
 nf-ingest = { path = "../../nf-ingest", optional = true }
 anyhow = "1.0"
