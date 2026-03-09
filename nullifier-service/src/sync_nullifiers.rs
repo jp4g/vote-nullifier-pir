@@ -78,6 +78,39 @@ async fn fetch_block_range(
     Ok(nf_buffer)
 }
 
+/// Compute the effective sync target height, accounting for rewinds and chain tip.
+fn resolve_target(start: u64, max_height: Option<u64>, chain_tip: u64) -> u64 {
+    match max_height {
+        Some(h) if h < start => {
+            let next_multiple = ((start / BLOCK_ALIGNMENT) + 1) * BLOCK_ALIGNMENT;
+            eprintln!(
+                "SYNC_HEIGHT {} is below current checkpoint {}; \
+                 advancing target to next multiple of 10: {}",
+                h, start, next_multiple
+            );
+            std::cmp::min(next_multiple, chain_tip)
+        }
+        Some(h) => std::cmp::min(h, chain_tip),
+        None => chain_tip,
+    }
+}
+
+/// Partition `[current, target]` into up to `n` consecutive batch ranges of
+/// at most [`BATCH_SIZE`] blocks each.
+fn build_batch_ranges(current: u64, target: u64, n: usize) -> Vec<(u64, u64)> {
+    let mut ranges = Vec::with_capacity(n);
+    let mut batch_start = current;
+    for _ in 0..n {
+        if batch_start > target {
+            break;
+        }
+        let batch_end = std::cmp::min(batch_start + BATCH_SIZE - 1, target);
+        ranges.push((batch_start, batch_end));
+        batch_start = batch_end + 1;
+    }
+    ranges
+}
+
 /// Sync nullifiers from multiple lightwalletd servers into flat files.
 ///
 /// Connects to each URL in `lwd_urls`, streams blocks from the resume point to
@@ -106,26 +139,7 @@ pub async fn sync(
 
     let start = resume_height(dir)?;
     let existing = file_store::nullifier_count(dir)?;
-
-    // Determine the effective sync target.
-    //
-    // If max_height is set but already lies below the current checkpoint (i.e.
-    // we have synced past the requested height), we cannot rewind.  Instead we
-    // advance to the next multiple-of-10 block height above the checkpoint so
-    // there is always a clean forward stopping point.
-    let target = match max_height {
-        Some(h) if h < start => {
-            let next_multiple = ((start / BLOCK_ALIGNMENT) + 1) * BLOCK_ALIGNMENT;
-            eprintln!(
-                "SYNC_HEIGHT {} is below current checkpoint {}; \
-                 advancing target to next multiple of 10: {}",
-                h, start, next_multiple
-            );
-            std::cmp::min(next_multiple, chain_tip)
-        }
-        Some(h) => std::cmp::min(h, chain_tip),
-        None => chain_tip,
-    };
+    let target = resolve_target(start, max_height, chain_tip);
 
     if start > NU5_ACTIVATION_HEIGHT {
         eprintln!(
@@ -153,19 +167,8 @@ pub async fn sync(
     let mut blocks_synced: u64 = 0;
 
     while current <= target {
-        // Build up to N batch ranges, one per server
-        let mut batch_ranges: Vec<(u64, u64)> = Vec::with_capacity(n);
-        let mut batch_start = current;
-        for _ in 0..n {
-            if batch_start > target {
-                break;
-            }
-            let batch_end = std::cmp::min(batch_start + BATCH_SIZE - 1, target);
-            batch_ranges.push((batch_start, batch_end));
-            batch_start = batch_end + 1;
-        }
+        let batch_ranges = build_batch_ranges(current, target, n);
 
-        // Spawn parallel downloads
         let mut handles = Vec::with_capacity(batch_ranges.len());
         for (i, &(range_start, range_end)) in batch_ranges.iter().enumerate() {
             let mut client = clients[i].clone();
@@ -174,15 +177,13 @@ pub async fn sync(
             }));
         }
 
-        // Await all, collect results
         let mut all_nfs: Vec<(u64, Vec<u8>)> = Vec::new();
         for handle in handles {
             all_nfs.extend(handle.await??);
         }
-        let cycle_end = batch_ranges.last().unwrap().1;
+        let cycle_end = batch_ranges.last().expect("batch_ranges is non-empty").1;
         let cycle_nfs = all_nfs.len() as u64;
 
-        // Append nullifiers then atomically commit the checkpoint
         let offset = file_store::append_nullifiers(dir, &all_nfs)?;
         file_store::save_checkpoint(dir, cycle_end, offset)?;
 
