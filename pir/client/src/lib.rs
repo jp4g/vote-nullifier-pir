@@ -96,6 +96,12 @@ fn valid_leaves_for_row(num_ranges: usize, row_idx: usize) -> usize {
 
 // ── Shared tier-processing helpers ───────────────────────────────────────────
 
+/// Copy `siblings` into `path` starting at `offset`.
+#[inline]
+fn fill_path(path: &mut [Fp; TREE_DEPTH], offset: usize, siblings: &[Fp]) {
+    path[offset..offset + siblings.len()].copy_from_slice(siblings);
+}
+
 /// Locate the nullifier's subtree in Tier 0, fill its siblings into `path`,
 /// and return the subtree index `s1`.
 fn process_tier0(
@@ -106,10 +112,7 @@ fn process_tier0(
     let s1 = tier0
         .find_subtree(nullifier)
         .context("nullifier not found in any Tier 0 subtree")?;
-    let siblings = tier0.extract_siblings(s1);
-    for (i, &sib) in siblings.iter().enumerate() {
-        path[PIR_DEPTH - TIER0_LAYERS + i] = sib;
-    }
+    fill_path(path, PIR_DEPTH - TIER0_LAYERS, &tier0.extract_siblings(s1));
     Ok(s1)
 }
 
@@ -124,10 +127,7 @@ fn process_tier1(
     let s2 = tier1
         .find_sub_subtree(nullifier)
         .context("nullifier not found in any Tier 1 sub-subtree")?;
-    let siblings = tier1.extract_siblings(s2);
-    for (i, &sib) in siblings.iter().enumerate() {
-        path[PIR_DEPTH - TIER0_LAYERS - TIER1_LAYERS + i] = sib;
-    }
+    fill_path(path, PIR_DEPTH - TIER0_LAYERS - TIER1_LAYERS, &tier1.extract_siblings(s2));
     Ok(s2)
 }
 
@@ -150,14 +150,8 @@ fn process_tier2_and_build(
         .find_leaf(nullifier, valid_leaves)
         .context("nullifier not found in Tier 2 leaf scan")?;
 
-    let siblings = tier2.extract_siblings(leaf_local_idx, valid_leaves, &hasher);
-    for (i, &sib) in siblings.iter().enumerate() {
-        path[i] = sib;
-    }
-
-    for level in PIR_DEPTH..TREE_DEPTH {
-        path[level] = empty_hashes[level];
-    }
+    fill_path(path, 0, &tier2.extract_siblings(leaf_local_idx, valid_leaves, &hasher));
+    fill_path(path, PIR_DEPTH, &empty_hashes[PIR_DEPTH..TREE_DEPTH]);
 
     let global_leaf_idx = t2_row_idx * TIER2_LEAVES + leaf_local_idx;
     let (low, width) = tier2.leaf_record(leaf_local_idx);
