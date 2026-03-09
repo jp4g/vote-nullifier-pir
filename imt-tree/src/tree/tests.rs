@@ -442,18 +442,20 @@ fn test_duplicate_nullifiers_produce_same_tree() {
 fn test_sentinel_tree_all_ranges_under_2_250() {
     let tree = build_sentinel_tree(&[]).unwrap();
 
-    let two_250 = Fp::from(2u64).pow([250, 0, 0, 0]);
-
+    // Directly check each width against the same constraint used
+    // by verify_range_widths: byte 31 of the LE repr < 0x04 means
+    // the value fits in 250 bits (bits 250-255 are zero).
     for (i, [low, width]) in tree.ranges().iter().enumerate() {
-        let max_width = two_250 - Fp::one();
-        let check = max_width - *width;
-        let repr = check.to_repr();
+        let repr = width.to_repr();
         assert!(
-            repr.as_ref()[31] < 0x40,
+            repr.as_ref()[31] < 0x04,
             "range {} has width >= 2^250: low={:?}, width={:?}",
             i, low, width
         );
     }
+
+    // Also verify via the production method.
+    tree.verify_range_widths().expect("sentinel tree should pass width verification");
 }
 
 #[test]
