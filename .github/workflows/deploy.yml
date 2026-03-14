@@ -1,5 +1,5 @@
 # Deploy nf-server to a remote host on every push to main.
-# Requires repository secrets: DEPLOY_HOST, DEPLOY_USER, SSH_PASSWORD.
+# Requires repository secrets: DEPLOY_HOST, DEPLOY_USER, SSH_KEY.
 # See docs/deploy-setup.md for one-time remote setup.
 
 name: Deploy nf-server
@@ -79,7 +79,7 @@ jobs:
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
-          password: ${{ secrets.SSH_PASSWORD }}
+          key: ${{ secrets.SSH_KEY }}
           source: "nf-server,nullifier-query-server.service"
           target: ${{ env.DEPLOY_PATH }}
 
@@ -88,7 +88,7 @@ jobs:
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
-          password: ${{ secrets.SSH_PASSWORD }}
+          key: ${{ secrets.SSH_KEY }}
           script: |
             sudo chmod +x /opt/nf-ingest/nf-server
             sudo cp /opt/nf-ingest/nullifier-query-server.service /etc/systemd/system/nullifier-query-server.service

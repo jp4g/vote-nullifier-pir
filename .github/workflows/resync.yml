@@ -1,7 +1,7 @@
 # Manually trigger a nullifier resync on the deploy host.
 # Runs the full ingest → export → restart pipeline so the PIR server
 # picks up the new data.
-# Requires repository secrets: DEPLOY_HOST, DEPLOY_USER, SSH_PASSWORD.
+# Requires repository secrets: DEPLOY_HOST, DEPLOY_USER, SSH_KEY.
 
 name: Resync nullifier snapshot
 
@@ -39,7 +39,7 @@ jobs:
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
-          password: ${{ secrets.SSH_PASSWORD }}
+          key: ${{ secrets.SSH_KEY }}
           command_timeout: 60m
           script: |
             cd /opt/nf-ingest && \
