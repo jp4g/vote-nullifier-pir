@@ -7,17 +7,18 @@ use pasta_curves::Fp;
 use tracing::info;
 
 use super::{
-    build_levels, build_nf_ranges, commit_ranges, find_range_for_value, load_full_tree, load_tree,
+    build_levels, build_nf_ranges, expand_ranges, find_range_for_value, load_full_tree, load_tree,
     precompute_empty_hashes, save_full_tree, save_tree, ImtProofData, Range, TREE_DEPTH,
 };
 
 /// A nullifier non-inclusion tree built from on-chain nullifiers.
 ///
 /// Constructed from a set of nullifier field elements, this struct computes
-/// gap ranges between consecutive nullifiers and commits each range as a
-/// Merkle leaf. The resulting fixed-depth tree supports exclusion proofs:
-/// given a value, [`prove`](NullifierTree::prove) produces proof data
-/// showing the value is not a nullifier.
+/// gap ranges between consecutive nullifiers and stores each range as a pair
+/// of adjacent leaves (low, high) in a Sinsemilla Merkle tree. The resulting
+/// fixed-depth tree supports exclusion proofs: given a value,
+/// [`prove`](NullifierTree::prove) produces proof data showing the value is
+/// not a nullifier.
 ///
 /// All intermediate hash levels are pre-computed and retained so that
 /// generating a Merkle authentication path is O([`TREE_DEPTH`]) -- a simple
@@ -25,7 +26,7 @@ use super::{
 pub struct NullifierTree {
     ranges: Vec<Range>,
     /// `levels[i]` holds the node hashes at tree level `i`.
-    /// Level 0 contains the leaf commitments (padded to even length).
+    /// Level 0 contains the paired leaves (low, high values, padded to even length).
     pub(crate) levels: Vec<Vec<Fp>>,
     /// Pre-computed empty subtree hashes for each level.
     empty_hashes: [Fp; TREE_DEPTH],
@@ -60,13 +61,13 @@ impl NullifierTree {
     /// with the sentinel invariant required by the delegation circuit.
     pub(crate) fn from_ranges(ranges: Vec<Range>) -> Self {
         let t0 = Instant::now();
-        let leaves = commit_ranges(&ranges);
-        info!(count = leaves.len(), elapsed_s = format!("{:.1}", t0.elapsed().as_secs_f64()), "leaf hashing");
+        let leaves = expand_ranges(&ranges);
+        info!(count = leaves.len(), elapsed_s = format!("{:.1}", t0.elapsed().as_secs_f64()), "leaf expansion");
 
         let empty_hashes = precompute_empty_hashes();
 
         let t1 = Instant::now();
-        let (root, levels) = build_levels(leaves, &empty_hashes, TREE_DEPTH);
+        let (root, levels) = build_levels(leaves, &empty_hashes, TREE_DEPTH, 0);
         info!(level_count = levels.len(), elapsed_s = format!("{:.1}", t1.elapsed().as_secs_f64()), "tree built");
 
         Self { ranges, levels, empty_hashes, root, height: None }
@@ -127,12 +128,12 @@ impl NullifierTree {
         Ok(())
     }
 
-    /// The leaf commitment hashes (level 0 of the tree).
+    /// The paired leaves at level 0 of the tree (low, high interleaved).
     ///
-    /// Returns only the populated leaves, excluding any padding element
+    /// Returns only the populated leaves (2 per range), excluding any padding
     /// that was added for even-length pairing.
     pub fn leaves(&self) -> &[Fp] {
-        &self.levels[0][..self.ranges.len()]
+        &self.levels[0][..self.ranges.len() * 2]
     }
 
     /// Generate a non-membership proof for `value`.
@@ -143,18 +144,30 @@ impl NullifierTree {
     /// The returned [`ImtProofData`] can be fed directly to the delegation
     /// circuit's condition 13 (IMT non-membership verification).
     ///
+    /// In the paired-leaf model, `leaf_pos` is `2 * range_index` (always even),
+    /// and `path[0]` is `high = low + width` (the sibling leaf).
+    ///
     /// This is O([`TREE_DEPTH`]) -- it walks the pre-computed levels collecting
     /// sibling hashes rather than rebuilding the entire tree.
     pub fn prove(&self, value: Fp) -> Option<ImtProofData> {
         let idx = find_range_for_value(&self.ranges, value)?;
+        let leaf_pos = (idx * 2) as u32; // Each range occupies 2 leaf slots
         let mut path = [Fp::zero(); TREE_DEPTH];
-        let mut pos = idx;
+        let mut pos = leaf_pos as usize;
         for (level, sibling_hash) in path.iter_mut().enumerate().take(TREE_DEPTH) {
             let sibling = pos ^ 1;
             *sibling_hash = if sibling < self.levels[level].len() {
                 self.levels[level][sibling]
             } else {
-                self.empty_hashes[level]
+                if level == 0 {
+                    // Empty leaf at level 0 is the uncommitted value
+                    Fp::from(crate::hasher::UNCOMMITTED_ORCHARD)
+                } else {
+                    // empty_hashes[k] = the empty subtree hash produced by
+                    // hashing at Sinsemilla level k. A node at tree level L
+                    // (L >= 1) is the result of hashing at level L-1.
+                    self.empty_hashes[level - 1]
+                }
             };
             pos >>= 1;
         }
@@ -163,7 +176,7 @@ impl NullifierTree {
             root: self.root,
             low,
             width,
-            leaf_pos: idx as u32,
+            leaf_pos,
             path,
         })
     }

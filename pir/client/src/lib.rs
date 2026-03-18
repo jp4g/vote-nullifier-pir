@@ -10,7 +10,7 @@ use anyhow::{Context, Result};
 use ff::PrimeField as _;
 use pasta_curves::Fp;
 
-use imt_tree::hasher::PoseidonHasher;
+use imt_tree::hasher::SinsemillaHasher;
 use imt_tree::tree::{precompute_empty_hashes, TREE_DEPTH};
 // Re-exported so downstream crates (e.g. librustvoting) can reference the type
 // returned by PirClientBlocking::fetch_proof without a direct imt-tree dependency.
@@ -111,7 +111,8 @@ fn process_tier0(
     let s1 = tier0
         .find_subtree(nullifier)
         .context("nullifier not found in any Tier 0 subtree")?;
-    fill_path(path, PIR_DEPTH - TIER0_LAYERS, &tier0.extract_siblings(s1));
+    // +1 shift: PIR level k = full tree level k+1 (paired-leaf model)
+    fill_path(path, PIR_DEPTH - TIER0_LAYERS + 1, &tier0.extract_siblings(s1));
     Ok(s1)
 }
 
@@ -126,7 +127,8 @@ fn process_tier1(
     let s2 = tier1
         .find_sub_subtree(nullifier)
         .context("nullifier not found in any Tier 1 sub-subtree")?;
-    fill_path(path, PIR_DEPTH - TIER0_LAYERS - TIER1_LAYERS, &tier1.extract_siblings(s2));
+    // +1 shift: PIR level k = full tree level k+1 (paired-leaf model)
+    fill_path(path, PIR_DEPTH - TIER0_LAYERS - TIER1_LAYERS + 1, &tier1.extract_siblings(s2));
     Ok(s2)
 }
 
@@ -141,7 +143,7 @@ fn process_tier2_and_build(
     empty_hashes: &[Fp; TREE_DEPTH],
     root29: Fp,
 ) -> Result<ImtProofData> {
-    let hasher = PoseidonHasher::new();
+    let hasher = SinsemillaHasher::new();
     let tier2 = Tier2Row::from_bytes(tier2_row)?;
     let valid_leaves = valid_leaves_for_row(num_ranges, t2_row_idx);
 
@@ -149,24 +151,43 @@ fn process_tier2_and_build(
         .find_leaf(nullifier, valid_leaves)
         .context("nullifier not found in Tier 2 leaf scan")?;
 
-    // Fill the bottom 8 levels of the Merkle path with the tier-2 siblings
-    fill_path(path, 0, &tier2.extract_siblings(leaf_local_idx, valid_leaves, &hasher));
-    // Fill the last 3 levels with empty hashes.
-    // At the current nullifier numbers, ~51, within 2^26 -> height 26 is sufficient.
-    // Changing height would require regenerating . To bullet-proof the system, we create
-    // circuits that assume height of 29 which fits 536M.
-    // To bridge the gap between what we have today in PIR and the circuit's assumptions,
-    // we add empty hash pads.
-    fill_path(path, PIR_DEPTH, &empty_hashes[PIR_DEPTH..TREE_DEPTH]);
+    // The proof path is relative to the FULL paired-leaf tree (depth 29).
+    // path[0] = raw sibling leaf value (paired-leaf model: high = low + width)
+    // path[1..9] = tier-2 siblings (PIR levels 0-7 = full tree levels 1-8)
+    // path[9..] is filled by tier1/tier0/padding callers
+    //
+    // PIR tree level k = full tree level k+1 because PIR leaves are pre-hashed
+    // at Sinsemilla level 0 (commit_ranges), so PIR internal nodes start at
+    // Sinsemilla level 1.
 
-    let global_leaf_idx = t2_row_idx * TIER2_LEAVES + leaf_local_idx;
+    // path[0]: the paired-leaf sibling = high = low + width of the SAME range.
+    // In the paired-leaf model, low is at position 2k and high is at 2k+1.
+    let (low_val, width_val) = tier2.leaf_record(leaf_local_idx);
+    path[0] = low_val + width_val;
+
+    // path[1..9]: tier-2 internal node siblings (shifted by 1 for paired-leaf)
+    let tier2_siblings = tier2.extract_siblings(leaf_local_idx, valid_leaves, &hasher);
+    fill_path(path, 1, &tier2_siblings);
+
+    // Padding: path[PIR_DEPTH+1..TREE_DEPTH] with empty hashes.
+    // path[level] is a sibling at full tree level `level`.
+    // Empty subtree at tree level L = empty_hashes[L-1].
+    for level in (PIR_DEPTH + 1)..TREE_DEPTH {
+        path[level] = empty_hashes[level - 1];
+    }
+
+    // Global leaf position in the FULL paired-leaf tree:
+    // Each PIR leaf covers one range. In the paired-leaf model, range k
+    // has low at position 2k and high at position 2k+1.
+    let global_range_idx = t2_row_idx * TIER2_LEAVES + leaf_local_idx;
+    let leaf_pos = (global_range_idx * 2) as u32; // always even (low leaf)
     let (low, width) = tier2.leaf_record(leaf_local_idx);
 
     Ok(ImtProofData {
         root: root29,
         low,
         width,
-        leaf_pos: global_leaf_idx as u32,
+        leaf_pos,
         path: *path,
     })
 }

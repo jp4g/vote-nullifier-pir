@@ -8,7 +8,7 @@ use pasta_curves::Fp;
 use rayon::prelude::*;
 use tracing::info;
 
-pub(crate) use crate::hasher::PoseidonHasher;
+pub(crate) use crate::hasher::SinsemillaHasher;
 pub use crate::proof::ImtProofData;
 
 mod nullifier_tree;
@@ -19,10 +19,9 @@ mod tests;
 
 /// Depth of the nullifier range Merkle tree.
 ///
-/// Each on-chain nullifier produces approximately one gap range (n nullifiers
-/// -> n + 1 ranges). Zcash mainnet currently has under 64M Orchard nullifiers.
-/// We plan for this circuit to support up to 256M nullifiers, so the tree
-/// needs capacity for ~2^28 leaves: `log2(256 << 20) + 1 = 29`.
+/// With paired leaves (each range occupies 2 leaf slots), the tree supports
+/// up to 2^28 ranges (~268M). This is sufficient for Zcash mainnet which
+/// currently has under 64M Orchard nullifiers.
 pub const TREE_DEPTH: usize = 29;
 
 /// Byte size of one serialized `Fp` field element (Pallas base field).
@@ -33,8 +32,12 @@ const RANGE_BYTES: usize = FP_BYTES * 2;
 
 /// A gap range `[low, width]` representing an interval between two adjacent
 /// on-chain nullifiers. `low` is the interval start and `width = high - low`
-/// where `high` is the inclusive upper bound. Each leaf in the Merkle tree
-/// commits to one range via `hash(low, width)`.
+/// where `high` is the inclusive upper bound.
+///
+/// **Paired-leaf model**: each range becomes two adjacent leaves in the
+/// Merkle tree — `low` at position `2k` and `high = low + width` at
+/// position `2k + 1`. This matches the Orchard nullifier tree convention
+/// where `nf_start` is always the left leaf and `nf_end` is its sibling.
 ///
 /// **Exclusion proof**: to prove a value `x` is not a nullifier, the prover
 /// reveals a range `[low, width]` where `x - low <= width` plus a Merkle path
@@ -59,20 +62,14 @@ const RANGE_BYTES: usize = FP_BYTES * 2;
 /// ## Tree structure and padding
 ///
 /// The tree has a fixed depth of [`TREE_DEPTH`]. With `n` on-chain nullifiers
-/// the tree contains `n + 1` populated leaves. The remaining `2^TREE_DEPTH -
-/// (n + 1)` leaf slots are empty.
+/// the tree contains `n + 1` ranges, each producing 2 leaves (total `2(n+1)`).
+/// The remaining leaf slots are filled with the Orchard "uncommitted" value
+/// `Fp::from(2)`. At each level, the empty hash is computed by self-hashing
+/// the level below using Sinsemilla MerkleCRH with level domain separation:
+/// `empty[0] = Sinsemilla(l=0, 2, 2)`, `empty[i+1] = Sinsemilla(l=i+1, empty[i], empty[i])`.
 ///
-/// Empty slots are filled with `hash(0, 0)` -- the commitment of an
-/// empty (low=0, width=0) leaf. At each level of the tree, the empty hash is
-/// computed by self-hashing the level below:
-/// `empty[0] = hash(0, 0)`, `empty[i+1] = hash(empty[i], empty[i])`. Any
-/// subtree consisting entirely of empty leaves collapses to the empty hash for
-/// that level. Odd-length layers are padded with the empty hash before hashing
-/// up to the next level.
-///
-/// This means the root is deterministic for a given set of nullifiers
-/// regardless of the tree capacity -- adding more empty slots doesn't change
-/// the root because they all reduce to the same empty subtree hashes.
+/// This matches the Orchard `EMPTY_ROOTS` exactly, so the IMT tree can be
+/// extended to depth 32 by padding with `EMPTY_ROOTS[29..32]`.
 pub type Range = [Fp; 2];
 
 /// Return type for [`load_full_tree`]: `(ranges, levels, root, height)`.
@@ -100,31 +97,54 @@ pub fn build_nf_ranges(nfs: impl IntoIterator<Item = Fp>) -> Vec<Range> {
     ranges
 }
 
-/// Hash each `(low, width)` range pair into a single leaf commitment.
+/// Expand ranges into paired leaves: `[low, high, low, high, ...]`.
+///
+/// Each `[low, width]` range produces two adjacent leaves:
+/// - Position `2k`: `low`
+/// - Position `2k+1`: `high = low + width`
+///
+/// This matches the Orchard nullifier tree convention where `nf_start` is
+/// always at an even position and `nf_end` is the odd sibling.
+pub fn expand_ranges(ranges: &[Range]) -> Vec<Fp> {
+    let mut leaves = Vec::with_capacity(ranges.len() * 2);
+    for &[low, width] in ranges {
+        leaves.push(low);
+        leaves.push(low + width);
+    }
+    leaves
+}
+
+/// Hash each `(low, width)` range pair into a single leaf commitment using
+/// Sinsemilla MerkleCRH at level 0.
+///
+/// The leaf hash is `Sinsemilla(l=0, low, high)` where `high = low + width`.
+/// This is used by the PIR tree, which stores pre-hashed leaves and starts
+/// its internal hashing at level 1.
 pub fn commit_ranges(ranges: &[Range]) -> Vec<Fp> {
     ranges
         .par_iter()
-        .map_init(PoseidonHasher::new, |hasher, [low, width]| {
-            hasher.hash(*low, *width)
+        .map_init(SinsemillaHasher::new, |hasher, [low, width]| {
+            hasher.hash(0, *low, *low + *width)
         })
         .collect()
 }
 
-/// Pre-compute the empty subtree hash at each tree level.
+/// Pre-compute the empty subtree hash at each tree level using Sinsemilla.
 ///
-/// `empty[0] = hash(0, 0)` -- the hash of an empty (low=0, width=0) leaf.
-/// `empty[i]` is the hash of a fully-empty subtree of height `i`, computed as
-/// `hash(empty[i-1], empty[i-1])`.
+/// `empty[0] = Sinsemilla(l=0, UNCOMMITTED, UNCOMMITTED)` — the hash of two
+/// uncommitted (Fp::from(2)) leaves at level 0.
+/// `empty[i] = Sinsemilla(l=i, empty[i-1], empty[i-1])` — the hash of a
+/// fully-empty subtree of height `i`.
 ///
-/// These are used during tree construction and proof generation to represent
-/// the hash of any subtree that contains no populated leaves, avoiding the
-/// need to recompute them on every call.
+/// These values are identical to the Orchard `EMPTY_ROOTS[1..TREE_DEPTH+1]`
+/// since they use the same hash function and empty leaf value.
 pub fn precompute_empty_hashes() -> [Fp; TREE_DEPTH] {
-    let hasher = PoseidonHasher::new();
+    let hasher = SinsemillaHasher::new();
+    let empty_leaf = Fp::from(crate::hasher::UNCOMMITTED_ORCHARD);
     let mut empty = [Fp::default(); TREE_DEPTH];
-    empty[0] = hasher.hash(Fp::zero(), Fp::zero());
+    empty[0] = hasher.hash(0, empty_leaf, empty_leaf);
     for i in 1..TREE_DEPTH {
-        empty[i] = hasher.hash(empty[i - 1], empty[i - 1]);
+        empty[i] = hasher.hash(i, empty[i - 1], empty[i - 1]);
     }
     empty
 }
@@ -132,30 +152,43 @@ pub fn precompute_empty_hashes() -> [Fp; TREE_DEPTH] {
 /// Build the Merkle tree bottom-up, retaining all intermediate levels.
 ///
 /// Returns `(root, levels)` where `levels[i]` contains the node hashes at
-/// tree level `i` (level 0 = padded leaf hashes). Each level is padded to
-/// even length using the pre-computed empty hash for that level so that
-/// pair-wise hashing produces the next level cleanly.
+/// tree level `i` (level 0 = input leaves, padded to even length).
+/// Each level is padded using the pre-computed empty hash so that pair-wise
+/// hashing produces the next level cleanly.
 ///
-/// This uses [`TREE_DEPTH`] levels and retains every intermediate layer so
-/// that Merkle auth paths can be extracted in O([`TREE_DEPTH`]) via simple
-/// sibling lookups.
-/// Build Merkle tree levels bottom-up from leaf hashes.
+/// `level_offset` controls the Sinsemilla level domain separation:
+/// - For the full paired-leaf tree (NullifierTree), use `level_offset = 0`.
+///   Level 0 contains raw `(low, high)` values and the first hash at level 0
+///   combines them with `Sinsemilla(l=0, low, high)`.
+/// - For the PIR tree, use `level_offset = 1`. Level 0 contains pre-hashed
+///   leaves (`Sinsemilla(l=0, low, high)`) computed by `commit_ranges()`, so
+///   the first internal hash should use `Sinsemilla(l=1, ...)`.
 ///
-/// `depth` controls the number of tree levels (use `TREE_DEPTH` for a full
-/// depth-29 tree, or a smaller value like 26 for the PIR tree).
-/// Returns `(root, levels)` where `levels[0]` contains leaf hashes and
-/// `levels[depth-1]` contains the root's two children.
-pub fn build_levels(mut leaves: Vec<Fp>, empty: &[Fp; TREE_DEPTH], depth: usize) -> (Fp, Vec<Vec<Fp>>) {
-    let hasher = PoseidonHasher::new();
+/// Uses Sinsemilla MerkleCRH with level-based domain separation at each
+/// level, matching the Orchard Merkle tree hash exactly.
+pub fn build_levels(
+    mut leaves: Vec<Fp>,
+    empty: &[Fp; TREE_DEPTH],
+    depth: usize,
+    level_offset: usize,
+) -> (Fp, Vec<Vec<Fp>>) {
+    let hasher = SinsemillaHasher::new();
+    let empty_leaf = Fp::from(crate::hasher::UNCOMMITTED_ORCHARD);
     let mut levels: Vec<Vec<Fp>> = Vec::with_capacity(depth);
 
-    // Level 0 = leaf commitments, padded to even length.
-    // Takes ownership of `leaves` to avoid a 1.6 GB memcpy at scale.
+    // Level 0 padding value depends on the level_offset:
+    // - offset=0: raw leaves, pad with the uncommitted leaf value (Fp::from(2))
+    // - offset=1: pre-hashed leaves (commit_ranges), pad with empty[0] = hash(0, 2, 2)
+    let level0_pad = if level_offset == 0 {
+        empty_leaf
+    } else {
+        empty[level_offset - 1]
+    };
     if leaves.is_empty() {
-        leaves.push(empty[0]);
+        leaves.push(level0_pad);
     }
     if leaves.len() & 1 == 1 {
-        leaves.push(empty[0]);
+        leaves.push(level0_pad);
     }
     levels.push(leaves);
 
@@ -164,23 +197,30 @@ pub fn build_levels(mut leaves: Vec<Fp>, empty: &[Fp; TREE_DEPTH], depth: usize)
     for i in 0..depth - 1 {
         let prev = &levels[i];
         let pairs = prev.len() / 2;
+        let sinsemilla_level = i + level_offset;
         let mut next: Vec<Fp> = if pairs >= PAR_THRESHOLD {
             prev.par_chunks_exact(2)
-                .map_init(PoseidonHasher::new, |h, pair| h.hash(pair[0], pair[1]))
+                .map_init(SinsemillaHasher::new, |h, pair| h.hash(sinsemilla_level, pair[0], pair[1]))
                 .collect()
         } else {
             (0..pairs)
-                .map(|j| hasher.hash(prev[j * 2], prev[j * 2 + 1]))
+                .map(|j| hasher.hash(sinsemilla_level, prev[j * 2], prev[j * 2 + 1]))
                 .collect()
         };
         if next.len() & 1 == 1 {
-            next.push(empty[i + 1]);
+            // next is at tree level i+1 (result of hashing level-i pairs).
+            // The empty hash for level i+1 nodes is empty[i + level_offset].
+            // empty[k] = hash of a fully-empty subtree at Sinsemilla level k,
+            // which represents a node at tree level k+1.
+            // For level_offset=0: tree level i+1 → empty[i]
+            // For level_offset=1: tree level i+1 but Sinsemilla level i+1 → empty[i+1]
+            next.push(empty[i + level_offset]);
         }
         levels.push(next);
     }
 
     let top = &levels[depth - 1];
-    let root = hasher.hash(top[0], top[1]);
+    let root = hasher.hash(depth - 1 + level_offset, top[0], top[1]);
 
     (root, levels)
 }

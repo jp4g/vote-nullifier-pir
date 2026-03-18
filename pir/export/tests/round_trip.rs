@@ -6,7 +6,7 @@
 use ff::{Field, PrimeField as _};
 use pasta_curves::Fp;
 
-use imt_tree::hasher::PoseidonHasher;
+use imt_tree::hasher::SinsemillaHasher;
 use imt_tree::tree::{build_sentinel_tree, TREE_DEPTH};
 use imt_tree::ImtProofData;
 
@@ -28,17 +28,17 @@ fn construct_proof(
     empty_hashes: &[Fp; TREE_DEPTH],
     root29: Fp,
 ) -> Option<ImtProofData> {
-    let hasher = PoseidonHasher::new();
+    let hasher = SinsemillaHasher::new();
     let tier0 = Tier0Data::from_bytes(tier0_data.to_vec()).ok()?;
 
     let s1 = tier0.find_subtree(value)?;
 
     let mut path = [Fp::default(); TREE_DEPTH];
 
-    // Tier 0 siblings (bottom-up levels 15..25)
+    // +1 shift: PIR level k = full tree level k+1 (paired-leaf model)
     let tier0_siblings = tier0.extract_siblings(s1);
     for (i, &sib) in tier0_siblings.iter().enumerate() {
-        path[PIR_DEPTH - TIER0_LAYERS + i] = sib;
+        path[PIR_DEPTH - TIER0_LAYERS + 1 + i] = sib;
     }
 
     // Tier 1: direct row lookup
@@ -50,7 +50,7 @@ fn construct_proof(
 
     let tier1_siblings = tier1.extract_siblings(s2);
     for (i, &sib) in tier1_siblings.iter().enumerate() {
-        path[PIR_DEPTH - TIER0_LAYERS - TIER1_LAYERS + i] = sib;
+        path[PIR_DEPTH - TIER0_LAYERS - TIER1_LAYERS + 1 + i] = sib;
     }
 
     // Tier 2: direct row lookup
@@ -62,22 +62,35 @@ fn construct_proof(
 
     let leaf_idx = tier2.find_leaf(value, valid_leaves)?;
 
+    // path[0]: the paired-leaf sibling = high = low + width of the SAME range.
+    // In the paired-leaf model, low is at position 2k and high is at 2k+1.
+    // path[0] is always the level-0 sibling of the low leaf.
+    let (low, width) = tier2.leaf_record(leaf_idx);
+    path[0] = low + width;
+
+    // path[1..9]: tier-2 internal node siblings (shifted by 1)
     let tier2_siblings = tier2.extract_siblings(leaf_idx, valid_leaves, &hasher);
     for (i, &sib) in tier2_siblings.iter().enumerate() {
-        path[i] = sib;
+        path[1 + i] = sib;
     }
 
-    // Path padding (depth 26 → 29)
-    path[PIR_DEPTH..TREE_DEPTH].copy_from_slice(&empty_hashes[PIR_DEPTH..TREE_DEPTH]);
+    // Path padding (depth 26 → 29), shifted by 1
+    // path[level] is a sibling at full tree level `level`.
+    // Empty subtree at tree level L = empty_hashes[L-1].
+    for level in (PIR_DEPTH + 1)..TREE_DEPTH {
+        path[level] = empty_hashes[level - 1];
+    }
 
-    let global_leaf_idx = t2_row_idx * TIER2_LEAVES + leaf_idx;
+    // Global leaf position in full paired-leaf tree: range k → pos 2k
+    let global_range_idx = t2_row_idx * TIER2_LEAVES + leaf_idx;
+    let leaf_pos = (global_range_idx * 2) as u32;
     let (low, width) = tier2.leaf_record(leaf_idx);
 
     Some(ImtProofData {
         root: root29,
         low,
         width,
-        leaf_pos: global_leaf_idx as u32,
+        leaf_pos,
         path,
     })
 }
@@ -205,7 +218,7 @@ fn test_pir_proof_matches_existing_prove() {
     pir_export::tier2::export(&tree.levels, &tree.ranges, &tree.empty_hashes, &mut tier2_data)
         .unwrap();
 
-    for &[low, _] in ranges.iter().take(50) {
+    for (range_i, &[low, _]) in ranges.iter().take(50).enumerate() {
         let value = low;
 
         let proof_existing = tree29.prove(value).expect("existing prove failed");
@@ -220,9 +233,23 @@ fn test_pir_proof_matches_existing_prove() {
         )
         .expect("PIR proof construction failed");
 
-        assert_eq!(proof_existing.low, proof_pir.low, "low mismatch");
-        assert_eq!(proof_existing.width, proof_pir.width, "width mismatch");
-        assert!(proof_pir.verify(value), "PIR proof verification failed");
+        assert_eq!(proof_existing.low, proof_pir.low, "low mismatch at range {}", range_i);
+        assert_eq!(proof_existing.width, proof_pir.width, "width mismatch at range {}", range_i);
+        assert_eq!(proof_existing.leaf_pos, proof_pir.leaf_pos, "leaf_pos mismatch at range {}", range_i);
+        assert_eq!(proof_existing.root, proof_pir.root, "root mismatch at range {}", range_i);
+
+        // Compare paths element by element
+        for (level, (e, p)) in proof_existing.path.iter().zip(proof_pir.path.iter()).enumerate() {
+            if e != p {
+                eprintln!(
+                    "  range {}: path[{}] mismatch: existing={} pir={}",
+                    range_i, level, hex::encode(e.to_repr()), hex::encode(p.to_repr())
+                );
+            }
+        }
+        assert_eq!(proof_existing.path, proof_pir.path, "path mismatch at range {}", range_i);
+
+        assert!(proof_pir.verify(value), "PIR proof verification failed at range {}", range_i);
     }
 }
 

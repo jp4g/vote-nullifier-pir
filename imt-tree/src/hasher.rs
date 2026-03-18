@@ -1,116 +1,131 @@
-use ff::PrimeField as _;
-use halo2_gadgets::poseidon::primitives::{P128Pow5T3, Spec};
-use pasta_curves::Fp;
+use ff::PrimeFieldBits;
+use pasta_curves::pallas;
+use sinsemilla::HashDomain;
 
-/// A reusable Poseidon hasher that avoids per-call initialisation overhead.
+/// Personalization string for the Merkle CRH — matches Orchard exactly.
+const MERKLE_CRH_PERSONALIZATION: &str = "z.cash:Orchard-MerkleCRH";
+
+/// Number of bits per field element used in the Merkle hash input.
+/// This is `pallas::Base::NUM_BITS` = 255.
+const L_ORCHARD_MERKLE: usize = 255;
+
+/// Number of bits used to encode the level in Sinsemilla MerkleCRH.
+const K: usize = 10;
+
+/// The "uncommitted" leaf value used for empty tree nodes.
+/// Matches the Orchard protocol: <https://zips.z.cash/protocol/protocol.pdf#thmuncommittedorchard>
+pub const UNCOMMITTED_ORCHARD: u64 = 2;
+
+/// A Sinsemilla-based Merkle hasher compatible with Orchard's MerkleCRH.
 ///
-/// `poseidon::Hash::init()` calls `P128Pow5T3::constants()` every time,
-/// heap-allocating and copying 64 round constants (~6 KiB). During tree
-/// building this adds up to ~128 M unnecessary allocations. `PoseidonHasher`
-/// computes the constants once and implements the permutation inline,
-/// producing identical results to the canonical `poseidon::Hash` API.
+/// Uses `sinsemilla::HashDomain` with the `"z.cash:Orchard-MerkleCRH"`
+/// personalization. The hash input is `i2lebsp_k(level) || left || right`
+/// where each field element contributes 255 bits.
 ///
-/// Correctness is verified by `test_poseidon_hasher_equivalence`.
-pub struct PoseidonHasher {
-    round_constants: Vec<[Fp; 3]>,
-    mds: [[Fp; 3]; 3],
-    /// `ConstantLength<2>` capacity element: `L * 2^64` where `L = 2`.
-    initial_capacity: Fp,
+/// This produces identical results to `MerkleHashOrchard::combine` from the
+/// orchard crate, enabling the IMT tree to be verified by the existing vote
+/// circuit without modification.
+pub struct SinsemillaHasher {
+    domain: HashDomain,
 }
 
-impl Default for PoseidonHasher {
+impl Default for SinsemillaHasher {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl PoseidonHasher {
-    /// Create a new hasher, computing round constants and MDS matrix once.
+impl SinsemillaHasher {
+    /// Create a new hasher with the Orchard MerkleCRH domain.
     pub fn new() -> Self {
-        let (round_constants, mds, _) = P128Pow5T3::constants();
-        // ConstantLength<L> encodes capacity as L * 2^64 (with output length 1).
-        let initial_capacity = Fp::from_u128(2u128 << 64);
-        PoseidonHasher {
-            round_constants,
-            mds,
-            initial_capacity,
+        SinsemillaHasher {
+            domain: HashDomain::new(MERKLE_CRH_PERSONALIZATION),
         }
     }
 
-    /// Hash two field elements using Poseidon.
+    /// Hash two field elements at a given tree level using Sinsemilla MerkleCRH.
     ///
-    /// For `ConstantLength<2>` with width = 3, rate = 2 the sponge absorbs
-    /// both inputs in a single block (no padding), so the hash reduces to:
-    ///
+    /// The input to the hash is:
     /// ```text
-    /// state = [left, right, capacity]
-    /// permute(&mut state)
-    /// return state[0]
+    /// i2lebsp_10(level) || le_bits(left)[0..255] || le_bits(right)[0..255]
     /// ```
+    /// Total: 520 bits.
     ///
-    /// This equivalence is proven by the `orchard_spec_equivalence` test in
-    /// halo2_gadgets and validated locally by `test_poseidon_hasher_equivalence`.
+    /// Returns `Fp::zero()` if the hash produces the identity point (should
+    /// never happen in practice with valid inputs).
     #[inline]
-    pub fn hash(&self, left: Fp, right: Fp) -> Fp {
-        let mut state = [left, right, self.initial_capacity];
-        self.permute(&mut state);
-        state[0]
+    pub fn hash(&self, level: usize, left: pallas::Base, right: pallas::Base) -> pallas::Base {
+        let level_bits = i2lebsp_k(level);
+        let left_bits = left.to_le_bits();
+        let right_bits = right.to_le_bits();
+        let bits = std::iter::empty()
+            .chain(level_bits.iter().copied())
+            .chain(left_bits.iter().by_vals().take(L_ORCHARD_MERKLE))
+            .chain(right_bits.iter().by_vals().take(L_ORCHARD_MERKLE));
+        self.domain.hash(bits).unwrap_or(pallas::Base::zero())
+    }
+}
+
+/// Convert an integer to K bits in little-endian order.
+///
+/// Matches `i2lebsp_k` from the orchard crate's `constants::sinsemilla` module.
+fn i2lebsp_k(int: usize) -> [bool; K] {
+    assert!(int < (1 << K));
+    let mut bits = [false; K];
+    for (i, bit) in bits.iter_mut().enumerate() {
+        *bit = (int >> i) & 1 == 1;
+    }
+    bits
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ff::Field;
+
+    #[test]
+    fn test_sinsemilla_hasher_deterministic() {
+        let h1 = SinsemillaHasher::new();
+        let h2 = SinsemillaHasher::new();
+        let a = pallas::Base::from(42u64);
+        let b = pallas::Base::from(99u64);
+        assert_eq!(h1.hash(0, a, b), h2.hash(0, a, b));
     }
 
-    /// Poseidon permutation with P128Pow5T3 parameters (R_F = 8, R_P = 56).
-    fn permute(&self, state: &mut [Fp; 3]) {
-        const R_F_HALF: usize = 4; // full_rounds / 2
-        const R_P: usize = 56;
-
-        let rcs = &self.round_constants;
-        let mut ri = 0;
-
-        // First half: full rounds (S-box on every element).
-        for _ in 0..R_F_HALF {
-            let rc = &rcs[ri];
-            state[0] = Self::pow5(state[0] + rc[0]);
-            state[1] = Self::pow5(state[1] + rc[1]);
-            state[2] = Self::pow5(state[2] + rc[2]);
-            self.apply_mds(state);
-            ri += 1;
-        }
-
-        // Partial rounds (S-box on first element only).
-        for _ in 0..R_P {
-            let rc = &rcs[ri];
-            state[0] += rc[0];
-            state[1] += rc[1];
-            state[2] += rc[2];
-            state[0] = Self::pow5(state[0]);
-            self.apply_mds(state);
-            ri += 1;
-        }
-
-        // Second half: full rounds.
-        for _ in 0..R_F_HALF {
-            let rc = &rcs[ri];
-            state[0] = Self::pow5(state[0] + rc[0]);
-            state[1] = Self::pow5(state[1] + rc[1]);
-            state[2] = Self::pow5(state[2] + rc[2]);
-            self.apply_mds(state);
-            ri += 1;
-        }
+    #[test]
+    fn test_sinsemilla_hasher_level_matters() {
+        let h = SinsemillaHasher::new();
+        let a = pallas::Base::from(1u64);
+        let b = pallas::Base::from(2u64);
+        // Different levels should produce different hashes
+        assert_ne!(h.hash(0, a, b), h.hash(1, a, b));
     }
 
-    /// x^5 via explicit squaring: 3 multiplications instead of
-    /// the generic variable-time exponentiation loop.
-    #[inline(always)]
-    fn pow5(x: Fp) -> Fp {
-        let x2 = x.square();
-        let x4 = x2.square();
-        x4 * x
+    #[test]
+    fn test_sinsemilla_hasher_order_matters() {
+        let h = SinsemillaHasher::new();
+        let a = pallas::Base::from(1u64);
+        let b = pallas::Base::from(2u64);
+        assert_ne!(h.hash(0, a, b), h.hash(0, b, a));
     }
 
-    #[inline(always)]
-    fn apply_mds(&self, state: &mut [Fp; 3]) {
-        let [s0, s1, s2] = *state;
-        state[0] = self.mds[0][0] * s0 + self.mds[0][1] * s1 + self.mds[0][2] * s2;
-        state[1] = self.mds[1][0] * s0 + self.mds[1][1] * s1 + self.mds[1][2] * s2;
-        state[2] = self.mds[2][0] * s0 + self.mds[2][1] * s1 + self.mds[2][2] * s2;
+    #[test]
+    fn test_empty_leaf_hash() {
+        let h = SinsemillaHasher::new();
+        let empty = pallas::Base::from(UNCOMMITTED_ORCHARD);
+        // Hashing two empty leaves at level 0 should be deterministic
+        let result = h.hash(0, empty, empty);
+        assert_ne!(result, pallas::Base::zero());
+    }
+
+    #[test]
+    fn test_i2lebsp_k() {
+        assert_eq!(i2lebsp_k(0), [false; 10]);
+        assert_eq!(i2lebsp_k(1), {
+            let mut bits = [false; 10];
+            bits[0] = true;
+            bits
+        });
+        assert_eq!(i2lebsp_k(1023), [true; 10]);
     }
 }

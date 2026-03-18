@@ -8,7 +8,7 @@ anyhow = "1.0"
 ff = "0.13"
 hex = "0.4"
 pasta_curves = "0.5"
-halo2_gadgets = { version = "0.3", default-features = false }
+sinsemilla = "0.1"
 rayon = "1"
 tracing = "0.1"
 

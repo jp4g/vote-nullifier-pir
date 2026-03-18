@@ -60,11 +60,14 @@ impl<'a> Tier2Row<'a> {
     ///
     /// The sibling at the leaf level (bottom-up 0) is computed from the sibling leaf
     /// record when that sibling is populated, otherwise it uses the empty-leaf hash.
+    ///
+    /// Uses Sinsemilla MerkleCRH at level 0 to hash the sibling leaf pair
+    /// `(low, low + width)`, matching the `commit_ranges` convention.
     pub fn extract_siblings(
         &self,
         leaf_idx: usize,
         valid_leaves: usize,
-        hasher: &imt_tree::hasher::PoseidonHasher,
+        hasher: &imt_tree::hasher::SinsemillaHasher,
     ) -> [Fp; TIER2_LAYERS] {
         debug_assert!(valid_leaves <= TIER2_LEAVES);
         let mut siblings = [Fp::default(); TIER2_LAYERS];
@@ -72,9 +75,10 @@ impl<'a> Tier2Row<'a> {
         let sibling_leaf_idx = leaf_idx ^ 1;
         siblings[0] = if sibling_leaf_idx < valid_leaves {
             let (sib_low, sib_width) = self.leaf_record(sibling_leaf_idx);
-            hasher.hash(sib_low, sib_width)
+            hasher.hash(0, sib_low, sib_low + sib_width)
         } else {
-            hasher.hash(Fp::zero(), Fp::zero())
+            let empty_leaf = Fp::from(imt_tree::hasher::UNCOMMITTED_ORCHARD);
+            hasher.hash(0, empty_leaf, empty_leaf)
         };
 
         let mut pos = leaf_idx;
@@ -92,7 +96,7 @@ impl<'a> Tier2Row<'a> {
 mod tests {
     use super::*;
     use crate::fp_utils::write_fp;
-    use imt_tree::hasher::PoseidonHasher;
+    use imt_tree::hasher::SinsemillaHasher;
 
     #[test]
     fn from_bytes_rejects_non_canonical_field_element() {
@@ -112,16 +116,20 @@ mod tests {
         let mut row = vec![0u8; TIER2_ROW_BYTES];
         let base = TIER2_INTERNAL_NODES * 32;
 
+        // Leaf 0: low=1, width=3 → high=4
         write_fp(&mut row[base..base + 32], Fp::one());
         write_fp(&mut row[base + 32..base + 64], Fp::from(3u64));
 
+        // Leaf 1: low=p-1, width=0 → high=p-1
         write_fp(&mut row[base + 64..base + 96], -Fp::one());
         write_fp(&mut row[base + 96..base + 128], Fp::zero());
 
         let tier2 = Tier2Row::from_bytes(&row).expect("valid synthetic Tier 2 row");
-        let hasher = PoseidonHasher::new();
-        let empty_leaf_hash = hasher.hash(Fp::zero(), Fp::zero());
-        let p_minus_one_leaf_hash = hasher.hash(-Fp::one(), Fp::zero());
+        let hasher = SinsemillaHasher::new();
+        let empty_leaf = Fp::from(imt_tree::hasher::UNCOMMITTED_ORCHARD);
+        let empty_leaf_hash = hasher.hash(0, empty_leaf, empty_leaf);
+        // Leaf hash for (p-1, 0): Sinsemilla(l=0, p-1, p-1+0) = Sinsemilla(l=0, p-1, p-1)
+        let p_minus_one_leaf_hash = hasher.hash(0, -Fp::one(), -Fp::one());
 
         let idx = tier2.find_leaf(-Fp::one(), 2).expect("p-1 leaf should be found");
         assert_eq!(idx, 1);

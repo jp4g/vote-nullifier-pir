@@ -22,7 +22,7 @@ use ff::PrimeField as _;
 use pasta_curves::Fp;
 use tracing::info;
 
-use imt_tree::hasher::PoseidonHasher;
+use imt_tree::hasher::SinsemillaHasher;
 use imt_tree::tree::{build_levels, commit_ranges, precompute_empty_hashes, Range, TREE_DEPTH};
 use imt_tree::tree::build_nf_ranges;
 
@@ -75,7 +75,7 @@ pub fn build_pir_tree(ranges: Vec<Range>) -> Result<PirTree> {
     let empty_hashes = precompute_empty_hashes();
 
     let t1 = Instant::now();
-    let (root26, levels) = build_levels(leaves, &empty_hashes, PIR_DEPTH);
+    let (root26, levels) = build_levels(leaves, &empty_hashes, PIR_DEPTH, 1);
     info!(
         level_count = levels.len(),
         elapsed_s = format!("{:.1}", t1.elapsed().as_secs_f64()),
@@ -100,11 +100,25 @@ pub fn build_pir_tree(ranges: Vec<Range>) -> Result<PirTree> {
 /// subtree of the appropriate height is the right child. This produces the
 /// same root as building a depth-29 tree with the same leaves (since all
 /// leaf slots above 2^26 are empty).
+///
+/// The Sinsemilla level parameter is the level of the children being combined.
+/// The PIR root26 sits at tree level 26. To extend:
+///   hash(26, root, empty_for_level_26) → level 27
+///   hash(27, result, empty_for_level_27) → level 28
+///   hash(28, result, empty_for_level_28) → level 29
+///
+/// `empty_hashes[k]` is the result of hashing at Sinsemilla level k, so it
+/// represents a node at tree level `k+1`. The empty subtree at tree level L
+/// is `empty_hashes[L-1]`.
 pub fn extend_root(root26: Fp, empty_hashes: &[Fp; TREE_DEPTH]) -> Fp {
-    let hasher = PoseidonHasher::new();
+    let hasher = SinsemillaHasher::new();
     let mut root = root26;
-    for empty_hash in &empty_hashes[PIR_DEPTH..FULL_DEPTH] {
-        root = hasher.hash(root, *empty_hash);
+    // The PIR tree uses level_offset=1, so its root sits at Sinsemilla level
+    // PIR_DEPTH (26), which is full-tree level PIR_DEPTH+1 (27).
+    // To reach full-tree level FULL_DEPTH (29 = TREE_DEPTH), we hash at
+    // Sinsemilla levels PIR_DEPTH+1 .. FULL_DEPTH-1 (= 27, 28).
+    for level in (PIR_DEPTH + 1)..FULL_DEPTH {
+        root = hasher.hash(level, root, empty_hashes[level - 1]);
     }
     root
 }

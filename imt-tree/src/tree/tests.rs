@@ -1,6 +1,6 @@
 use super::*;
 use crate::test_helpers::{fp, four_nullifiers};
-use halo2_gadgets::poseidon::primitives::{self as poseidon, ConstantLength, P128Pow5T3};
+use crate::hasher::SinsemillaHasher;
 
 #[test]
 fn test_build_ranges_from_4_nullifiers() {
@@ -59,7 +59,7 @@ fn test_merkle_paths_verify_for_each_range() {
     let test_values = [fp(5), fp(15), fp(25), fp(35), fp(41)];
     for (i, &value) in test_values.iter().enumerate() {
         let proof = tree.prove(value).expect("should produce proof");
-        assert_eq!(proof.leaf_pos, i as u32);
+        assert_eq!(proof.leaf_pos, (i * 2) as u32); // paired leaves: 2*range_idx
         assert!(
             proof.verify(value),
             "exclusion proof for range {} does not verify",
@@ -75,7 +75,7 @@ fn test_exclusion_proof_end_to_end() {
     // Prove that 15 is not a nullifier
     let value = fp(15);
     let proof = tree.prove(value).expect("should produce proof");
-    assert_eq!(proof.leaf_pos, 1); // range [11, width=8] (high=19)
+    assert_eq!(proof.leaf_pos, 2); // paired leaves: range 1 → pos 2*1=2
 
     assert_eq!(proof.low, fp(11));
     assert_eq!(proof.width, fp(8));   // width = 19 - 11 = 8
@@ -171,13 +171,14 @@ fn test_unsorted_input_produces_same_tree() {
 
 #[test]
 fn test_precompute_empty_hashes_chain() {
-    let hasher = PoseidonHasher::new();
+    let hasher = SinsemillaHasher::new();
+    let empty_leaf = Fp::from(crate::hasher::UNCOMMITTED_ORCHARD);
     let empty = precompute_empty_hashes();
 
-    assert_eq!(empty[0], hasher.hash(Fp::zero(), Fp::zero()));
+    assert_eq!(empty[0], hasher.hash(0, empty_leaf, empty_leaf));
 
     for i in 1..TREE_DEPTH {
-        let expected = hasher.hash(empty[i - 1], empty[i - 1]);
+        let expected = hasher.hash(i, empty[i - 1], empty[i - 1]);
         assert_eq!(
             empty[i], expected,
             "empty hash mismatch at level {}",
@@ -188,7 +189,7 @@ fn test_precompute_empty_hashes_chain() {
 
 #[test]
 fn test_build_levels_consistency() {
-    let hasher = PoseidonHasher::new();
+    let hasher = SinsemillaHasher::new();
     let tree = NullifierTree::build(four_nullifiers());
 
     for i in 0..TREE_DEPTH - 1 {
@@ -196,7 +197,7 @@ fn test_build_levels_consistency() {
         let next = &tree.levels[i + 1];
         let pairs = prev.len() / 2;
         for j in 0..pairs {
-            let expected = hasher.hash(prev[j * 2], prev[j * 2 + 1]);
+            let expected = hasher.hash(i, prev[j * 2], prev[j * 2 + 1]);
             assert_eq!(
                 next[j], expected,
                 "level {} node {} does not match hash of level {} children",
@@ -206,7 +207,7 @@ fn test_build_levels_consistency() {
     }
 
     let top = &tree.levels[TREE_DEPTH - 1];
-    let expected_root = hasher.hash(top[0], top[1]);
+    let expected_root = hasher.hash(TREE_DEPTH - 1, top[0], top[1]);
     assert_eq!(tree.root(), expected_root);
 }
 
@@ -214,8 +215,9 @@ fn test_build_levels_consistency() {
 fn test_leaves_accessor() {
     let tree = NullifierTree::build(four_nullifiers());
     let leaves = tree.leaves();
-    assert_eq!(leaves.len(), 5);
-    let expected = commit_ranges(tree.ranges());
+    // Paired leaves: 5 ranges × 2 leaves each = 10
+    assert_eq!(leaves.len(), 10);
+    let expected = expand_ranges(tree.ranges());
     assert_eq!(leaves, expected.as_slice());
 }
 
@@ -334,11 +336,11 @@ fn test_single_nullifier_tree() {
     assert_eq!(ranges[1][1], Fp::one().neg() - fp(101)); // width = MAX - 101
 
     let proof_low = tree.prove(fp(50)).unwrap();
-    assert_eq!(proof_low.leaf_pos, 0);
+    assert_eq!(proof_low.leaf_pos, 0); // paired: range 0 → pos 0
     assert!(proof_low.verify(fp(50)));
 
     let proof_high = tree.prove(fp(200)).unwrap();
-    assert_eq!(proof_high.leaf_pos, 1);
+    assert_eq!(proof_high.leaf_pos, 2); // paired: range 1 → pos 2
     assert!(proof_high.verify(fp(200)));
 
     assert!(tree.prove(fp(100)).is_none());
@@ -409,7 +411,7 @@ fn test_larger_tree_200_nullifiers() {
         let range = tree.ranges()[idx];
         let value = range[0];
         let proof = tree.prove(value).unwrap();
-        assert_eq!(proof.leaf_pos, idx as u32);
+        assert_eq!(proof.leaf_pos, (idx * 2) as u32); // paired leaves
         assert!(proof.verify(value), "proof at leaf index {} does not verify", idx);
     }
 
@@ -508,93 +510,65 @@ fn test_e2e_sentinel_tree_proof_gen_and_verify() {
 }
 
 #[test]
-fn test_empty_hashes_match_circuit_convention() {
-    let hasher = PoseidonHasher::new();
+fn test_pir_tree_root_matches_full_tree() {
+    // The PIR tree (pre-hashed leaves, depth 26, level_offset=1) extended
+    // to depth 29 should produce the same root as the full paired-leaf tree
+    // (raw leaves, depth 29, level_offset=0).
+    let nfs = four_nullifiers();
+    let mut sorted = nfs.clone();
+    sorted.sort();
+    let ranges = build_nf_ranges(sorted);
+
+    // Full tree
+    let leaves_full = expand_ranges(&ranges);
     let empty = precompute_empty_hashes();
-    let expected_leaf = hasher.hash(Fp::zero(), Fp::zero());
-    assert_eq!(empty[0], expected_leaf);
+    let (root29_full, levels_full) = build_levels(leaves_full, &empty, TREE_DEPTH, 0);
+
+    // PIR tree
+    let leaves_pir = commit_ranges(&ranges);
+    let (root26_pir, levels_pir) = build_levels(leaves_pir, &empty, 26, 1);
+
+    // PIR level k should match full level k+1
+    let max_check = levels_pir.len().min(levels_full.len() - 1);
+    for k in 0..max_check {
+        let pir_len = levels_pir[k].len();
+        let full_len = levels_full[k + 1].len();
+        for i in 0..pir_len.min(full_len) {
+            assert_eq!(
+                levels_pir[k][i], levels_full[k + 1][i],
+                "PIR level {} node {} != full level {} node {}",
+                k, i, k + 1, i
+            );
+        }
+        assert_eq!(
+            pir_len, full_len,
+            "PIR level {} len {} != full level {} len {}",
+            k, pir_len, k + 1, full_len
+        );
+    }
+
+    // Extend PIR root to depth 29. PIR root at Sinsemilla level 26 = full
+    // tree level 27. Need 2 more hashes at Sinsemilla levels 27 and 28.
+    let hasher = SinsemillaHasher::new();
+    let mut root = root26_pir;
+    for level in 27..TREE_DEPTH {
+        root = hasher.hash(level, root, empty[level - 1]);
+    }
+
+    assert_eq!(
+        root, root29_full,
+        "PIR extended root must match full tree root"
+    );
+}
+
+#[test]
+fn test_empty_hashes_match_sinsemilla_convention() {
+    let hasher = SinsemillaHasher::new();
+    let empty_leaf = Fp::from(crate::hasher::UNCOMMITTED_ORCHARD);
+    let empty = precompute_empty_hashes();
+    assert_eq!(empty[0], hasher.hash(0, empty_leaf, empty_leaf));
 
     for i in 1..TREE_DEPTH {
-        assert_eq!(empty[i], hasher.hash(empty[i - 1], empty[i - 1]));
+        assert_eq!(empty[i], hasher.hash(i, empty[i - 1], empty[i - 1]));
     }
-}
-
-#[test]
-fn test_poseidon_hasher_equivalence() {
-    // Compare PoseidonHasher against the canonical poseidon::Hash implementation.
-    let hasher = PoseidonHasher::new();
-    let canonical = |l: Fp, r: Fp| -> Fp {
-        poseidon::Hash::<_, P128Pow5T3, ConstantLength<2>, 3, 2>::init().hash([l, r])
-    };
-
-    assert_eq!(
-        hasher.hash(Fp::zero(), Fp::zero()),
-        canonical(Fp::zero(), Fp::zero()),
-    );
-
-    assert_eq!(hasher.hash(fp(1), fp(2)), canonical(fp(1), fp(2)));
-    assert_eq!(hasher.hash(fp(42), fp(0)), canonical(fp(42), fp(0)));
-
-    let a = fp(0xDEAD_BEEF);
-    let b = fp(0xCAFE_BABE);
-    assert_eq!(hasher.hash(a, b), canonical(a, b));
-
-    assert_eq!(
-        hasher.hash(Fp::one().neg(), Fp::one()),
-        canonical(Fp::one().neg(), Fp::one()),
-    );
-}
-
-/// Frozen test vectors for Poseidon P128Pow5T3 ConstantLength<2> over Pallas.
-/// Generated from the canonical `poseidon::Hash` implementation. These protect
-/// against accidental changes to the permutation (e.g. optimized partial rounds).
-#[test]
-fn test_poseidon_frozen_vectors() {
-    let hasher = PoseidonHasher::new();
-
-    let from_hex = |s: &str| -> Fp {
-        let bytes: [u8; 32] = hex::decode(s).unwrap().try_into().unwrap();
-        Fp::from_repr(bytes).unwrap()
-    };
-
-    // (0, 0)
-    assert_eq!(
-        hasher.hash(Fp::zero(), Fp::zero()),
-        from_hex("7a515983cec6c21e27c2f24fbc31c54d698400d33300ebc7f4677cb71b529403"),
-    );
-    // (1, 2)
-    assert_eq!(
-        hasher.hash(fp(1), fp(2)),
-        from_hex("4ce3bd9407dc758983c62390ce00463beb82796eb0d40a0398993cb4eca55535"),
-    );
-    // (42, 0)
-    assert_eq!(
-        hasher.hash(fp(42), fp(0)),
-        from_hex("fad8a97bb5213839cff67906a2d74baa2b889ae882b3c44f3c0721c7edadaf3d"),
-    );
-    // (0xDEAD_BEEF, 0xCAFE_BABE)
-    assert_eq!(
-        hasher.hash(Fp::from(0xDEAD_BEEFu64), Fp::from(0xCAFE_BABEu64)),
-        from_hex("c2f13f05353ed3b31f348fd82539ed31649c8d31ee12ea0f9da8c22ba1c5b724"),
-    );
-    // (p-1, 1)
-    assert_eq!(
-        hasher.hash(Fp::one().neg(), Fp::one()),
-        from_hex("576b8132d0cba1b8232040b6f89a15e52ef26ada02dda96709f3212a9234d414"),
-    );
-    // (u64::MAX, u64::MAX)
-    assert_eq!(
-        hasher.hash(Fp::from(u64::MAX), Fp::from(u64::MAX)),
-        from_hex("d356503f556176a90fbccd1422c5d7fbf4eff2a2481921ae1edfbd1156eecb31"),
-    );
-    // (1, 1)
-    assert_eq!(
-        hasher.hash(Fp::one(), Fp::one()),
-        from_hex("22ebbf1ee67e974899f33bba822e29877168fe77058b27d00ca332118382b01b"),
-    );
-    // (0, 1)
-    assert_eq!(
-        hasher.hash(Fp::zero(), Fp::one()),
-        from_hex("8358d711a0329d38becd54fba7c283ed3e089a39c91b6a9d10efb02bc3f12f06"),
-    );
 }
