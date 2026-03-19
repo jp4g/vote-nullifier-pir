@@ -291,8 +291,8 @@ pub fn load_tree(path: &Path) -> Result<Vec<Range>> {
         .map(|chunk| {
             let low_arr: [u8; FP_BYTES] = chunk[..FP_BYTES].try_into().expect("chunk is exactly FP_BYTES");
             let width_arr: [u8; FP_BYTES] = chunk[FP_BYTES..RANGE_BYTES].try_into().expect("chunk is exactly FP_BYTES");
-            let low = Fp::from_repr(low_arr).expect("non-canonical Fp in tree file");
-            let width = Fp::from_repr(width_arr).expect("non-canonical Fp in tree file");
+            let low = Option::from(Fp::from_repr(low_arr)).expect("non-canonical Fp in tree file");
+            let width = Option::from(Fp::from_repr(width_arr)).expect("non-canonical Fp in tree file");
             [low, width]
         })
         .collect();
@@ -403,8 +403,8 @@ pub fn load_full_tree(path: &Path) -> Result<FullTreeData> {
         .map(|chunk| {
             let low_arr: [u8; FP_BYTES] = chunk[..FP_BYTES].try_into().expect("chunk is exactly FP_BYTES");
             let width_arr: [u8; FP_BYTES] = chunk[FP_BYTES..RANGE_BYTES].try_into().expect("chunk is exactly FP_BYTES");
-            let low = Fp::from_repr(low_arr).expect("non-canonical Fp in full tree file");
-            let width = Fp::from_repr(width_arr).expect("non-canonical Fp in full tree file");
+            let low = Option::from(Fp::from_repr(low_arr)).expect("non-canonical Fp in full tree file");
+            let width = Option::from(Fp::from_repr(width_arr)).expect("non-canonical Fp in full tree file");
             [low, width]
         })
         .collect();
@@ -421,7 +421,7 @@ pub fn load_full_tree(path: &Path) -> Result<FullTreeData> {
             .par_chunks_exact(FP_BYTES)
             .map(|chunk| {
                 let arr: [u8; FP_BYTES] = chunk.try_into().expect("chunk is exactly FP_BYTES");
-                Fp::from_repr(arr).expect("non-canonical Fp in level data")
+                Option::from(Fp::from_repr(arr)).expect("non-canonical Fp in level data")
             })
             .collect();
         levels.push(level);
@@ -430,7 +430,7 @@ pub fn load_full_tree(path: &Path) -> Result<FullTreeData> {
     // Root
     let root_bytes: [u8; FP_BYTES] = buf[pos..pos + FP_BYTES].try_into()
         .map_err(|_| anyhow::anyhow!("unexpected EOF reading root"))?;
-    let root = Fp::from_repr(root_bytes)
+    let root = Option::from(Fp::from_repr(root_bytes))
         .expect("non-canonical Fp for root in full tree file");
     pos += FP_BYTES;
 
