@@ -186,7 +186,7 @@ async fn run_rebuild(state: Arc<AppState>, target_height: u64) -> Result<()> {
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()?;
-            rt.block_on(sync_nullifiers::sync(&dd, &lwd, Some(target_height), |h, t, _, _| {
+            rt.block_on(sync_nullifiers::sync(&dd, &lwd, Some(target_height), None, |h, t, _, _| {
                 info!(height = h, target = t, "ingest progress");
                 let pct = if t > 0 {
                     2 + ((h as f64 / t as f64) * 8.0) as u8

@@ -23,6 +23,10 @@ pub struct Args {
     #[arg(long)]
     max_height: Option<u64>,
 
+    /// Start syncing from this block height instead of NU5 activation.
+    #[arg(long)]
+    start_height: Option<u64>,
+
     /// Delete stale sidecar files (nullifiers.tree, tier files) after ingestion.
     #[arg(long)]
     invalidate: bool,
@@ -47,10 +51,12 @@ pub async fn run(args: Args) -> Result<()> {
     );
     let t_start = std::time::Instant::now();
 
-    let result = sync_nullifiers::sync(dir, &lwd_urls, args.max_height, |height, target, batch, total| {
+    let start_height = args.start_height;
+    let effective_start = start_height.unwrap_or(sync_nullifiers::NU5_ACTIVATION_HEIGHT);
+    let result = sync_nullifiers::sync(dir, &lwd_urls, args.max_height, start_height, |height, target, batch, total| {
         let elapsed = t_start.elapsed().as_secs_f64();
         let bps = if elapsed > 0.0 {
-            (height - sync_nullifiers::NU5_ACTIVATION_HEIGHT) as f64 / elapsed
+            (height - effective_start) as f64 / elapsed
         } else {
             0.0
         };

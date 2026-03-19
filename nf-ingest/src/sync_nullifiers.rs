@@ -35,14 +35,14 @@ pub async fn fetch_chain_tip(lwd_url: &str) -> Result<u64> {
 ///
 /// Reads the checkpoint file and truncates any uncommitted bytes from
 /// the data file, then returns the last fully-committed height.
-/// If no checkpoint exists, starts from NU5 activation.
-pub fn resume_height(dir: &Path) -> Result<u64> {
+/// If no checkpoint exists, starts from `start_height`.
+pub fn resume_height(dir: &Path, start_height: u64) -> Result<u64> {
     match file_store::load_checkpoint(dir)? {
-        Some((h, offset)) if h >= NU5_ACTIVATION_HEIGHT => {
+        Some((h, offset)) if h >= start_height => {
             file_store::truncate_to_checkpoint(dir, offset)?;
             Ok(h)
         }
-        _ => Ok(NU5_ACTIVATION_HEIGHT),
+        _ => Ok(start_height),
     }
 }
 
@@ -124,9 +124,11 @@ pub async fn sync(
     dir: &Path,
     lwd_urls: &[String],
     max_height: Option<u64>,
+    start_height: Option<u64>,
     progress: impl Fn(u64, u64, u64, u64),
 ) -> Result<SyncResult> {
     std::fs::create_dir_all(dir)?;
+    let start_height = start_height.unwrap_or(NU5_ACTIVATION_HEIGHT);
 
     let mut clients = Vec::with_capacity(lwd_urls.len());
     for url in lwd_urls {
@@ -139,14 +141,14 @@ pub async fn sync(
         .await?;
     let chain_tip = latest.into_inner().height;
 
-    let start = resume_height(dir)?;
+    let start = resume_height(dir, start_height)?;
     let existing = file_store::nullifier_count(dir)?;
     let target = resolve_target(start, max_height, chain_tip);
 
-    if start > NU5_ACTIVATION_HEIGHT {
+    if start > start_height {
         info!(height = start, existing, "resuming from checkpoint");
     } else {
-        info!(height = NU5_ACTIVATION_HEIGHT, "starting fresh from NU5 activation");
+        info!(height = start_height, "starting fresh");
     }
     if let Some(h) = max_height {
         info!(max_height = h, chain_tip, "max height set");
@@ -223,7 +225,7 @@ mod tests {
     #[test]
     fn resume_height_fresh() {
         let dir = temp_dir("fresh");
-        assert_eq!(resume_height(&dir).unwrap(), NU5_ACTIVATION_HEIGHT);
+        assert_eq!(resume_height(&dir, NU5_ACTIVATION_HEIGHT).unwrap(), NU5_ACTIVATION_HEIGHT);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -240,7 +242,7 @@ mod tests {
         let offset = file_store::append_nullifiers(&dir, &nfs).unwrap();
         file_store::save_checkpoint(&dir, 1_700_001, offset).unwrap();
 
-        let h = resume_height(&dir).unwrap();
+        let h = resume_height(&dir, NU5_ACTIVATION_HEIGHT).unwrap();
         assert_eq!(h, 1_700_001);
 
         // All 3 nullifiers should still be present (checkpoint was exact)
@@ -264,7 +266,7 @@ mod tests {
         assert_eq!(file_store::nullifier_count(&dir).unwrap(), 3);
 
         // resume_height should truncate back to the committed state
-        let h = resume_height(&dir).unwrap();
+        let h = resume_height(&dir, NU5_ACTIVATION_HEIGHT).unwrap();
         assert_eq!(h, 1_700_000);
         assert_eq!(file_store::nullifier_count(&dir).unwrap(), 2);
 
